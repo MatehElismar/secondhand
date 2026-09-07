@@ -54,11 +54,25 @@ function looksLikeImage(buf: Buffer): boolean {
   return false;
 }
 
+// Every tool only reads marketplace data. Nothing here can message a seller,
+// make an offer, or buy anything.
+const READ_ONLY = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
+type AnnotatedTool = Tool & {
+  annotations?: { title?: string } & Partial<typeof READ_ONLY>;
+};
+
 // Define available tools
-const tools: Tool[] = [
+const tools: AnnotatedTool[] = [
   {
     name: 'search_marketplace',
-    description: `Search for items on secondary marketplaces. Supports: ${listMarketplaceNames().join(', ')}. Returns listing ID, title, price, location, and photo count. Facebook: location-based search, no auth. eBay: keyword search with condition filter, requires API keys. Depop: keyword search with filters for sort, condition, category, brands, sizes, colors (requires Chrome). Poshmark: keyword search with filters for sort, condition, sizes, colors (requires Chrome). Use get_listing_details with a listing ID for full description, all photos, seller info, and shipping options.`,
+    description: `Search live listings on secondhand marketplaces by keyword. Marketplaces: ${listMarketplaceNames().join(', ')}. Returns up to \`limit\` listings with id, title, price, location, seller and a thumbnail; call get_listing_details with an id for the description, every photo and shipping. Requirements: Facebook Marketplace needs no credentials but is local, so pass \`location\` as "City, ST"; eBay needs EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in the server environment; Depop and Poshmark need Chrome or Chromium on the machine. Behavior: read-only, no login, no purchases. Facebook may rate-limit repeated searches from one IP, and results for a query are cached for 90 seconds. Errors: a marketplace that fails returns success:false with the reason instead of throwing; an unknown marketplace name lists the valid ones; an empty result usually means the query was too specific, so widen the keywords or drop a price bound before concluding nothing exists. Not for: buying, messaging sellers, saved searches, or new-retail catalogs.`,
+    annotations: { title: 'Search Marketplace', ...READ_ONLY },
     inputSchema: {
       type: 'object',
       properties: {
@@ -146,7 +160,8 @@ const tools: Tool[] = [
   },
   {
     name: 'get_listing_details',
-    description: 'Get full details for a specific listing using an ID from search results: description, all photos, location, seller info, and shipping. Photos: by default (imageMode:"urls") you get direct full-resolution CDN image URLs to fetch yourself — most reliable, since some CDNs block server-side fetches. Set imageMode:"inline" (or includeImages:true) to have the server fetch the photos and return them as base64 image blocks inline. Use imageSize to trade resolution for payload and maxImages to cap the count.',
+    description: 'Get one listing in full using an id from search_marketplace or from a marketplace URL: description, every photo, location, seller and shipping options. Photos: by default (imageMode:"urls") you get direct full-resolution CDN image URLs to fetch yourself, which is the most reliable option because some CDNs block server-side fetches. Set imageMode:"inline" (or includeImages:true) to have the server fetch the photos and return them as base64 image blocks; if that fetch is blocked the server falls back to URLs. Use imageSize to trade resolution for payload and maxImages to cap the count. Requirements: the same as search_marketplace for that marketplace. Behavior: read-only, one listing per call, no login. Errors: a listing that has been removed, or an id from the wrong marketplace, returns an error message rather than a partial listing. Not for: searching (use search_marketplace) or fetching many listings at once.',
+    annotations: { title: 'Get Listing Details', ...READ_ONLY },
     inputSchema: {
       type: 'object',
       properties: {
@@ -185,7 +200,8 @@ const tools: Tool[] = [
   },
   {
     name: 'list_marketplaces',
-    description: 'List all available marketplaces and their status',
+    description: 'List the marketplaces this server can search right now, with each one\'s display name, whether it needs credentials, and whether it is currently reachable. Call it once when a search fails with an unknown-marketplace error or before offering a marketplace the user did not name. Behavior: read-only, no arguments, no network calls beyond a health check. Not for: searching or fetching listings.',
+    annotations: { title: 'List Marketplaces', ...READ_ONLY },
     inputSchema: {
       type: 'object',
       properties: {}
@@ -197,7 +213,8 @@ const tools: Tool[] = [
   // https://developers.openai.com/api/docs/guides/deep-research
   {
     name: 'search',
-    description: 'Search all available secondhand marketplaces at once (deep research). Returns results whose IDs (marketplace:listingId) can be passed to the fetch tool for full listing details.',
+    description: 'Search every available secondhand marketplace at once with a single query string, following the ChatGPT deep research tool contract. Returns results whose ids (marketplace:listingId) can be passed to the fetch tool. Behavior: read-only; Facebook results use the server\'s default location because this contract carries no location, so prefer search_marketplace when a place matters. Not for: filtered or local searches.',
+    annotations: { title: 'Search', ...READ_ONLY },
     inputSchema: {
       type: 'object',
       properties: {
@@ -211,7 +228,8 @@ const tools: Tool[] = [
   },
   {
     name: 'fetch',
-    description: 'Fetch full listing details for a result ID returned by the search tool. ID format: marketplace:listingId (e.g., "facebook:12345" or "ebay:v1|123|456").',
+    description: 'Fetch one listing in full for an id returned by the search tool, following the ChatGPT deep research tool contract. Id format: marketplace:listingId (for example "facebook:12345" or "ebay:v1|123|456"). Behavior: read-only. Errors: an id without the marketplace prefix, or for a removed listing, returns an error message. Not for: ids from search_marketplace, which take get_listing_details.',
+    annotations: { title: 'Fetch', ...READ_ONLY },
     inputSchema: {
       type: 'object',
       properties: {

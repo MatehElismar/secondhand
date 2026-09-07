@@ -199,6 +199,13 @@ describe('tools/list', () => {
       const schema = tool.inputSchema as { type: string; properties?: Record<string, unknown> };
       expect(schema.type).toBe('object');
       expect(tool.description ?? '').not.toBe('');
+      expect((tool as { annotations?: Record<string, unknown> }).annotations).toMatchObject({
+        title: expect.any(String),
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      });
       expect(Object.keys(schema.properties ?? {})).toEqual(
         expect.arrayContaining(required[tool.name]),
       );
