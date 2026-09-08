@@ -20,6 +20,16 @@ Works with Claude Desktop, Claude Code, Cursor, and other clients that run MCP s
 | Chrome running in the background | needed | not needed |
 | Price | free, forever | free tier, then $4.99 |
 
+## Documentation
+
+Detailed reference docs live in [`docs/`](./docs):
+
+| Doc | What it covers |
+|-----|----------------|
+| [`docs/MCP.md`](./docs/MCP.md) | MCP server: connecting clients, every tool, params, JSON-RPC example, env vars |
+| [`docs/REST-API.md`](./docs/REST-API.md) | REST API: endpoints, request/response, data model, curl examples |
+| [`docs/openapi.json`](./docs/openapi.json) | Static OpenAPI 3.0 spec for the REST API (regenerate via `GET /docs/json`) |
+
 ## Supported Marketplaces
 
 | Marketplace | Auth Required | Notes |
@@ -237,10 +247,17 @@ Depop/Poshmark need Chrome to be registered (see Configuration).
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/docs` | Interactive Swagger UI |
+| `GET` | `/docs/json` | Raw OpenAPI 3.0 document |
 | `GET` | `/health` | Service status + which marketplaces are registered |
 | `GET` | `/v1/locations/resolve` | Resolve a place name to coordinates |
 | `POST` | `/v1/search` | Search via a marketplace |
 | `GET` | `/v1/listings/:marketplace/:id` | Full details for one listing |
+
+> **Interactive docs**: open <http://localhost:3000/docs> for the Swagger UI. Each
+> endpoint has request/response schemas and example bodies; the raw spec (OpenAPI
+> 3.0.3) is at `GET /docs/json` if you want to generate a client or import it into
+> Postman.
 
 **`GET /v1/locations/resolve?marketplace=facebook&location=...`**
 

@@ -73,7 +73,27 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const app = buildApiServer();
+const app = await buildApiServer();
+
+describe('Swagger docs', () => {
+  it('serves the raw OpenAPI document at /docs/json', async () => {
+    const res = await app.inject({ method: 'GET', url: '/docs/json' });
+    expect(res.statusCode).toBe(200);
+    const doc = res.json();
+    expect(doc.openapi).toBe('3.0.3');
+    expect(doc.info.title).toBe('Secondhand MCP REST API');
+    const paths = Object.keys(doc.paths);
+    expect(paths).toEqual(
+      expect.arrayContaining(['/health', '/v1/locations/resolve', '/v1/search', '/v1/listings/{marketplace}/{id}']),
+    );
+  });
+
+  it('renders the Swagger UI page at /docs', async () => {
+    const res = await app.inject({ method: 'GET', url: '/docs' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/html');
+  });
+});
 
 describe('GET /health', () => {
   it('reports ok and the enabled marketplaces', async () => {
