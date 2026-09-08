@@ -340,7 +340,7 @@ describe('search_marketplace arguments', () => {
 });
 
 describe('search_marketplace results', () => {
-  it('sorts listings by numeric price and shows photo counts', async () => {
+  it('sorts listings by numeric price and shows image URLs', async () => {
     h.impl.facebook = {
       search: () =>
         ok('facebook', [
@@ -353,16 +353,27 @@ describe('search_marketplace results', () => {
     expect(text).toContain('📍 Location: Oakland, CA');
     expect(text.indexOf('Cheap')).toBeLessThan(text.indexOf('Pricey'));
     expect(text).toContain('   🆔 a');
-    expect(text).toContain('📷 1 photo\n');
-    expect(text).toContain('📷 2 photos');
-    expect(text).not.toContain('🖼️ Images');
+    expect(text).toContain('   🖼️ Images: x , y');
+    expect(text).toContain('   🖼️ Images: z');
+    expect(text).not.toContain('📷 1 photo');
   });
 
-  it('prints image URLs only when includeImages is set', async () => {
+  it('prints image URLs whether or not includeImages is set', async () => {
     h.impl.facebook = { search: () => ok('facebook', [listing({ images: ['https://cdn/1.jpg'] })]) };
-    const text = textOf(await call('search_marketplace', { query: 'chair', includeImages: true }));
+    const text = textOf(await call('search_marketplace', { query: 'chair' }));
     expect(text).toContain('🖼️ Images: https://cdn/1.jpg');
     expect(text).not.toContain('📷 1 photo');
+  });
+
+  it('prints the seller name from the normalized listing', async () => {
+    h.impl.facebook = {
+      search: () =>
+        ok('facebook', [
+          listing({ id: 's', title: 'Sold by Ada', price: '$40', priceNumeric: 40, seller: 'Ada L.', location: 'Oakland, CA' }),
+        ]),
+    };
+    const text = textOf(await call('search_marketplace', { query: 'chair' }));
+    expect(text).toContain('   👤 Seller: Ada L.');
   });
 
   it('says nothing was found rather than printing an empty list', async () => {
@@ -931,7 +942,7 @@ describe('single-marketplace result formatting', () => {
 });
 
 describe('all-marketplace result formatting', () => {
-  it('pluralises the photo count and omits the line when a listing has none', async () => {
+  it('prints image URLs (in listing order) and omits the line when a listing has none', async () => {
     h.impl.facebook = {
       search: () =>
         ok('facebook', [
@@ -942,19 +953,10 @@ describe('all-marketplace result formatting', () => {
         ]),
     };
     const text = textOf(await call('search_marketplace', { query: 'chair', marketplace: 'all' }));
-    expect(text).toContain('    📷 1 photo\n    🆔 one');
-    expect(text).toContain('    📷 2 photos\n    🆔 two');
+    expect(text).toContain('    🖼️ Images: a\n    🆔 one');
+    expect(text).toContain('    🖼️ Images: a , b\n    🆔 two');
     expect(text).toContain('No Pics\n    🆔 none');
     expect(text).toContain('Empty Album\n    🆔 empty');
-    expect(text).not.toContain('🖼️ Images');
-  });
-
-  it('prints image URLs instead of counts when includeImages is set', async () => {
-    h.impl.facebook = {
-      search: () => ok('facebook', [listing({ images: ['https://cdn/1.jpg', 'https://cdn/2.jpg'] })]),
-    };
-    const text = textOf(await call('search_marketplace', { query: 'chair', marketplace: 'all', includeImages: true }));
-    expect(text).toContain('    🖼️ Images: https://cdn/1.jpg , https://cdn/2.jpg');
     expect(text).not.toContain('📷');
   });
 

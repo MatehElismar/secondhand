@@ -1,0 +1,26 @@
+services:
+  api:
+    build:
+      context: .
+      # Set to true to install Chromium so Depop and Poshmark also work.
+      args:
+        INSTALL_CHROME: "false"
+    image: secondhand-mcp:local
+    container_name: secondhand-mcp-api
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      # Marketplace selection
+      MARKETPLACES: "${MARKETPLACES:-}"
+      # Facebook
+      SMARTPROXY_URL: "${SMARTPROXY_URL:-}"
+      # eBay
+      EBAY_CLIENT_ID: "${EBAY_CLIENT_ID:-}"
+      EBAY_CLIENT_SECRET: "${EBAY_CLIENT_SECRET:-}"
+      EBAY_MARKETPLACE_ID: "${EBAY_MARKETPLACE_ID:-EBAY_US}"
+    # Secrets are injected from a gitignored `.env` file in the project dir
+    # (see .env.example). Docker Compose also performs ${VAR} substitution here.
+    restart: unless-stopped
