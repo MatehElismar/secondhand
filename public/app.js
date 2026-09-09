@@ -360,7 +360,7 @@ function modelCardHtml(s, data) {
     : `<div class="arb-leg buy">
          <span class="arb-leg-label">Compras en ${escape(data.secondaryMarket)}</span>
          <span class="arb-leg-price">${usd(buy)}</span>
-         <span class="arb-leg-sub">mediana · n=${secUsd.sample ?? sec.count ?? 0}</span>
+         <span class="arb-leg-sub">mediana · n=${secUsd.sample ?? sec.count ?? 0}${sec.offModel ? ` · ${sec.offModel} de otro modelo excluido(s)` : ''}</span>
        </div>`;
 
   const math = noSecondary
@@ -383,8 +383,9 @@ function modelCardHtml(s, data) {
         <h3 class="arb-title">${escape(s.key)}</h3>
         <div class="arb-chips">
           <span class="chip">${p.count ?? 0} en ${escape(data.primaryMarket)}</span>
-          <span class="chip">${sec.count ?? 0} en ${escape(data.secondaryMarket)}</span>
+          <span class="chip">${sec.matchedCount ?? sec.count ?? 0} en ${escape(data.secondaryMarket)}</span>
           ${lowSample ? '<span class="chip warn">muestra baja</span>' : ''}
+          ${s.approximate ? '<span class="chip warn">aproximado · el título no fija el modelo exacto</span>' : ''}
         </div>
       </div>
       <div class="arb-verdict-wrap">

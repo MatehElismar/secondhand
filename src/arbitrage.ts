@@ -13,11 +13,11 @@
  */
 
 import { getMarketplace } from './marketplaces/index.js';
-import { ACCESSORY_RE, modelKey, parseModel, sameModel } from './models.js';
+import { ACCESSORY_RE, modelKey, modelsMatch, parseModel, sameModel } from './models.js';
 
 // Re-exported: callers imported these from here before the parser moved into
 // its own module.
-export { modelKey, parseModel, sameModel } from './models.js';
+export { modelKey, modelsMatch, parseModel, sameModel } from './models.js';
 
 const FX_DOP_PER_USD = 60; // heuristic; adjust to current rate
 // The SEARCHED marketplace (primary) is the SELL/target market; the OTHER
@@ -131,7 +131,7 @@ export function groupStats(listings: any[]): GroupStat[] {
  * leaving them in would surface the worst units as the best margins.
  */
 const BROKEN_RE =
-  /\b(for parts|parts only|not working|no funciona|broken|roto|cracked|crack|damaged|dañad|(heavy|deep|bad|major|lots of)\s+scratch|scratched|rough condition|poor condition|as is|as-is|bad esn|bad imei|icloud lock|activation lock|blacklisted|no power|does not|doesn'?t work|read description|carrier locked|locked to|network locked|(t-?mobile|at&t|verizon|sprint|cricket|boost|metropcs) only)\b/i;
+  /\b(for parts|parts only|not working|no funciona|broken|roto|cracked|crack|damaged|dañad|(heavy|deep|bad|major|lots of)\s+scratch|scratched|rough condition|poor condition|as is|as-is|bad esn|bad imei|icloud lock|activation lock|blacklisted|no power|does not|doesn'?t work|read description|carrier locked|locked to|network locked|(?<!\b(?:no|nothing|not|sin)\s)missing\s+\w+|(t-?mobile|at&t|verizon|sprint|cricket|boost|metropcs) only)\b/i;
 
 const isPartsLike = (l: any) => BROKEN_RE.test(String(l?.title || '')) || BROKEN_RE.test(String(l?.condition || ''));
 
@@ -251,17 +251,20 @@ export async function runArbitrage(opts: ArbitrageOptions) {
     usd: statsOf(priced),
   };
 
-  // Only compare models the titles actually identified. A group like "Laptop
-  // Dell Latitude" holds three different machines, and querying the other
-  // market with that string returns a decade of unrelated stock — the margin
-  // that falls out is fiction wearing a precise number.
-  const identified = allModels.filter((s) => s.confidence === 'high');
-  const skippedVague = allModels.filter((s) => s.confidence !== 'high' && s.count >= minMatches);
-  const eligible = identified.filter((s) => s.count >= minMatches);
+  // Only 'low' is refused outright: those titles ("Laptop Lenovo", "Laptop
+  // Gamer") name no model at all, so any margin drawn from them is fiction
+  // wearing a precise number. 'medium' names a product line without pinning
+  // the exact model — worth comparing, but the result is an approximation and
+  // is flagged as one rather than withheld.
+  const skippedVague = allModels.filter((s) => s.confidence === 'low' && s.count >= minMatches);
+  const eligible = allModels.filter((s) => s.confidence !== 'low' && s.count >= minMatches);
   const top = eligible.slice().sort((a, b) => b.count - a.count || (b.avg ?? 0) - (a.avg ?? 0)).slice(0, topN);
 
   const selected = [];
   for (const s of top) {
+    // The key is itself a canonical title, so parsing it back gives the group's
+    // structure without having to thread the original listing through.
+    const groupModel = parseModel(s.key);
     let secondaryInfo: any = { count: 0, sample: 0, usd: null, listings: [], buyable: [], excluded: 0, error: undefined };
     if (secondary) {
       const secResult = await secondary.search({
@@ -275,13 +278,24 @@ export async function runArbitrage(opts: ArbitrageOptions) {
         (l: any) => toUsd(l.priceNumeric, l.currency),
         { includeAuctions },
       );
-      const secPriced = kept.map((l: any) => toUsd(l.priceNumeric, l.currency)).filter((v): v is number => v != null && v > 0);
+      // The other market answers a keyword query, not a model query: asking for
+      // "PlayStation 5 Slim Digital" returns Disc units and bundles too. Group
+      // its results the same way the primary side was grouped, so the buy
+      // median describes the product being priced rather than everything the
+      // search happened to return.
+      const matching = kept.filter((l: any) => modelsMatch(parseModel(String(l.title || '')), groupModel));
+      const secPriced = matching.map((l: any) => toUsd(l.priceNumeric, l.currency)).filter((v): v is number => v != null && v > 0);
       secondaryInfo = {
         count: secListings.length,
+        /** Survived the buyable filter, before model matching. */
+        buyableCount: kept.length,
+        /** Actually the same model — what the median is computed from. */
+        matchedCount: matching.length,
+        offModel: kept.length - matching.length,
         sample: secPriced.length,
         usd: statsOf(secPriced),
         listings: secListings,
-        buyable: kept,
+        buyable: matching,
         excluded: dropped,
         error: secResult.error || undefined,
       };
@@ -308,8 +322,7 @@ export async function runArbitrage(opts: ArbitrageOptions) {
         // being bought for $6. This holds even when the buy-side sample is far
         // too small for its own median to be worth anything.
         if (sellMedian != null && buy < sellMedian * 0.35) return null;
-        // And it has to be the same phone we are pricing.
-        if (!sameModel(modelKey(String(l.title || '')), s.key)) return null;
+
         const unitNet =
           sellMedian != null ? sellMedian - buy - sellMedian * SELL_FEE_RATE - SHIPPING_COST_USD : null;
         return {
@@ -333,6 +346,9 @@ export async function runArbitrage(opts: ArbitrageOptions) {
     selected.push({
       key: s.key,
       count: s.count,
+      confidence: s.confidence,
+      /** The title named a line but not the exact model: treat as a ballpark. */
+      approximate: s.confidence === 'medium',
       primary: s,
       secondary: secondaryInfo,
       candidates,

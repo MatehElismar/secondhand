@@ -77,6 +77,17 @@ describe('filterBuyable', () => {
     expect(filterBuyable([...base, { title: good, priceNumeric: 530 }], price).kept.map((l) => l.title)).toContain(good);
   });
 
+  it('drops a unit with missing parts without flagging one that has none', () => {
+    const base = [phone(520), phone(540), phone(560), phone(580)];
+    const broken = 'PlayStation 5 Slim Digital Console White 1TB - Missing Side Panels';
+    expect(filterBuyable([...base, { title: broken, priceNumeric: 400 }], price).kept.map((l) => l.title))
+      .not.toContain(broken);
+    // "nothing missing" is a seller advertising completeness, not a defect.
+    const good = 'Apple iPhone 15 Pro 256GB Unlocked, nothing missing, complete box';
+    expect(filterBuyable([...base, { title: good, priceNumeric: 545 }], price).kept.map((l) => l.title))
+      .toContain(good);
+  });
+
   it('drops multi-unit lots far above the median', () => {
     const listings = [phone(500), phone(520), phone(540), phone(560), phone(4200, 'Lot of 8 iPhone 15 Pro')];
     const { kept } = filterBuyable(listings, price);

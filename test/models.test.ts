@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { modelKey, modelFamily, parseModel, parseStorage, sameModel } from '../src/models.js';
+import { modelKey, modelFamily, modelsMatch, parseModel, parseStorage, sameModel } from '../src/models.js';
 
 describe('parseStorage', () => {
   it('never mistakes RAM for storage', () => {
@@ -157,5 +157,76 @@ describe('confidence', () => {
 
   it('normalizes case so one model cannot become two groups', () => {
     expect(modelKey('HP EliteBook 840 G8 i5')).toBe(modelKey('HP Elitebook 840 G8 i5'));
+  });
+});
+
+describe('consoles', () => {
+  it('normalizes every spelling sellers use for one console', () => {
+    // These were six separate groups of the same product.
+    const digital = [
+      'PlayStation 5 Slim Digital (Nuevo Sellado)',
+      'Ps5 Slim digital totalmente nuevo.',
+      'Vendo PS5 Slim Digital o Cambio por Xbox series X',
+      'Sony PlayStation 5 Slim Digital Edition Gaming Console',
+    ];
+    expect(new Set(digital.map(modelKey))).toEqual(new Set(['PlayStation 5 Slim Digital']));
+  });
+
+  it('keeps Digital and Disc apart, since they do not price alike', () => {
+    expect(modelKey('Ps5 slim de disco')).toBe('PlayStation 5 Slim Disc');
+    expect(modelKey('PS5 Slim Digital')).toBe('PlayStation 5 Slim Digital');
+    expect(modelKey('PLAYSTATION 5 PRO DIGITAL 2TB')).toBe('PlayStation 5 Pro Digital 2TB');
+  });
+
+  it('reads Spanish capacity and edition wording', () => {
+    expect(modelKey('Play station 5 slim versión disco 1 tb de almacenamiento'))
+      .toBe('PlayStation 5 Slim Disc 1TB');
+  });
+
+  it('classifies Xbox and Switch', () => {
+    expect(modelKey('Xbox Series X 1TB Console')).toBe('Xbox Series X 1TB');
+    expect(modelKey('Nintendo Switch OLED 64GB')).toBe('Nintendo Switch OLED');
+    expect(modelKey('Nintendo Switch Lite')).toBe('Nintendo Switch Lite');
+  });
+
+  it('does not read the Switch OLED as a phone screen part', () => {
+    // "OLED" earned its place in the accessory rule via phone screens; on a
+    // Switch it is the model name.
+    expect(parseModel('Nintendo Switch OLED 64GB').isAccessory).toBe(false);
+    expect(parseModel('OLED For iPhone 15 Pro Max Touch Screen Replacement Display').isAccessory).toBe(true);
+  });
+
+  it('flags console spare parts', () => {
+    for (const t of [
+      'Sony PlayStation 5 PS5 SLIM Replacement Disc Drive CFI-ZDD1',
+      'Sony PlayStation 5 PS5 SLIM Motherboard Replacement CFI-2115',
+    ]) {
+      expect(parseModel(t).isAccessory, t).toBe(true);
+    }
+  });
+});
+
+describe('modelsMatch', () => {
+  const m = (t: string) => parseModel(t);
+
+  it('treats an unstated edition as compatible, not as a third product', () => {
+    // A seller who wrote "PS5 Slim" did not name a console that is neither
+    // Digital nor Disc.
+    expect(modelsMatch(m('PS5 Slim'), m('PS5 Slim Digital'))).toBe(true);
+    expect(modelsMatch(m('PS5 Slim'), m('PS5 Slim Disc'))).toBe(true);
+  });
+
+  it('refuses two stated editions that differ', () => {
+    expect(modelsMatch(m('PS5 Slim Digital'), m('PS5 Slim Disc'))).toBe(false);
+  });
+
+  it('refuses a different trim even when everything else agrees', () => {
+    expect(modelsMatch(m('PS5 Slim Digital'), m('PS5 Pro Digital'))).toBe(false);
+    expect(modelsMatch(m('iPhone 15 Pro 256GB'), m('iPhone 15 Pro Max 256GB'))).toBe(false);
+  });
+
+  it('treats capacity as a wildcard only when one side omits it', () => {
+    expect(modelsMatch(m('PS5 Slim Digital'), m('PS5 Slim Digital 1TB'))).toBe(true);
+    expect(modelsMatch(m('iPhone 15 Pro 128GB'), m('iPhone 15 Pro 512GB'))).toBe(false);
   });
 });

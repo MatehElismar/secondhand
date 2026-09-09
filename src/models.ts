@@ -20,6 +20,13 @@ export interface ParsedModel {
   generation: string | null;
   /** Trim: 'Pro Max', 'Pro', 'Plus', 'mini', 'Ultra', 'FE', 'Air'. */
   variant: string | null;
+  /**
+   * A refinement of the model rather than a different model: console 'Digital'
+   * vs 'Disc'. A seller who omits it has not named a third product, so it is a
+   * wildcard when matching — unlike a trim, where Pro and Pro Max are two
+   * different machines at two different prices.
+   */
+  edition: string | null;
   /** Apple silicon, when named: 'M2', 'M4 Pro'. */
   chip: string | null;
   /** Storage in GB — never RAM, and null when the title lists several. */
@@ -51,7 +58,7 @@ export interface ParsedModel {
  * before any buy-side filtering gets a chance to run.
  */
 export const ACCESSORY_RE =
-  /\b(case|cover|funda|carcasa|skin|sticker|bumper|wallet|holster|screen protector|protector de pantalla|tempered glass|mica|charger|cargador|cable|adapter|adaptador|earpods|airpods|headphone|headset|auricular|lcd|oled|digitizer|back ?glass|backhousing|back housing|housing|frame|flex|connector|motherboard|logic board|camera replacement|replacement (kit|part|screen|battery|display|digitizer)|repair (kit|part)|repuesto|holder|mount|stand|tripod|lens protector|grip|strap|band only|empty box|box only|caja vac|retail box|packaging|lot of \d+)\b/i;
+  /\b(case|cover|funda|carcasa|skin|sticker|bumper|wallet|holster|screen protector|protector de pantalla|tempered glass|mica|charger|cargador|cable|adapter|adaptador|earpods|airpods|headphone|headset|auricular|(lcd|oled)\\s*(screen|display|panel|assembly|replacement)|(screen|display|panel)\\s*(lcd|oled)|digitizer|back ?glass|backhousing|back housing|housing|frame|flex|connector|motherboard|logic board|camera replacement|replacement (kit|part|screen|battery|display|digitizer)|repair (kit|part)|repuesto|holder|mount|stand|tripod|lens protector|grip|strap|band only|empty box|box only|caja vac|retail box|packaging|dis[ck] drive|dualsense|dualshock|joy-?con|faceplate|cooling stand|charging (station|dock)|lot of \d+)\b/i;
 
 /** "For iPhone 15" / "Compatible with iPhone 15" only ever precede accessories. */
 const FOR_PREFIX_RE = /^\s*(for|para|compatible (with|con)|fits)\b/i;
@@ -119,6 +126,7 @@ export function parseModel(title: string): ParsedModel {
     line: null as string | null,
     generation: null as string | null,
     variant: null as string | null,
+    edition: null as string | null,
     chip: null as string | null,
     storageGb,
     multiStorage,
@@ -217,6 +225,12 @@ export function parseModel(title: string): ParsedModel {
     return finish({ ...base, brand: 'Samsung', line: 'Galaxy', generation, variant });
   }
 
+  // ── Game consoles ──────────────────────────────────────────────────────
+  const console_ = parseConsole(t);
+  // Spread order matters: a console that sets storageGb (the Switch, whose
+  // capacity never drives price) overrides it; the others inherit the parse.
+  if (console_) return finish({ ...base, ...console_ });
+
   // ── Windows laptops ────────────────────────────────────────────────────
   const pc = parsePcLaptop(t);
   if (pc) return finish({ ...base, ...pc });
@@ -228,7 +242,7 @@ export function parseModel(title: string): ParsedModel {
     .replace(/[^\p{L}\p{N} ]/gu, ' ')
     .split(/\s+/)
     .filter(Boolean)
-    .filter((w) => !/^(new|nuevo|used|usado|oem|original|genuine|sealed|unlocked|factory|the|de|para|con)$/i.test(w));
+    .filter((w) => !/^(new|nuevo|nueva|used|usado|usada|oem|original|genuine|sealed|sellado|sellada|unlocked|factory|vendo|venta|vende|cambio|oferta|the|de|para|con|en|y)$/i.test(w));
   return finish({
     ...base,
     generation: null,
@@ -237,6 +251,74 @@ export function parseModel(title: string): ParsedModel {
   } as never);
 }
 
+
+
+/**
+ * Consoles are a top secondhand category and sellers name them every possible
+ * way: "PS5", "PlayStation 5", "Play Station 5", "Vendo PS5 Slim". Left to the
+ * generic fallback these became six groups of one product, none of them
+ * comparable to anything.
+ *
+ * Edition matters as much as the model does: a Digital has no disc drive and
+ * sells for meaningfully less than the Disc version, so they must not merge.
+ */
+function parseConsole(t: string): Partial<ParsedModel> | null {
+  const edition = () => {
+    if (/\b(digital|digitale?)\b/i.test(t)) return 'Digital';
+    if (/\b(disc|disco|disk|dis[ck] drive|con lector|blu-?ray)\b/i.test(t)) return 'Disc';
+    return null;
+  };
+
+  const ps = t.match(/\bps\s?([2-5])\b/i) || t.match(/\bplay\s?station\s*([2-5])\b/i);
+  if (ps) {
+    const gen = ps[1];
+    const slim = /\bslim\b/i.test(t);
+    const pro = /\bpro\b/i.test(t);
+    return {
+      brand: 'Sony',
+      line: 'PlayStation',
+      generation: gen,
+      variant: pro ? 'Pro' : slim ? 'Slim' : null,
+      edition: edition(),
+      confidence: 'high',
+    };
+  }
+
+  const xbox = t.match(/\bxbox\s*(series\s*[xs]|one\s*[xs]?|360)?\b/i);
+  if (xbox) {
+    const raw = (xbox[1] || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const variant = raw
+      ? raw.startsWith('series')
+        ? `Series ${raw.slice(-1).toUpperCase()}`
+        : raw === '360'
+          ? '360'
+          : `One${raw.length > 3 ? ' ' + raw.slice(-1).toUpperCase() : ''}`
+      : null;
+    return {
+      brand: 'Microsoft',
+      line: 'Xbox',
+      generation: null,
+      variant,
+      edition: edition(),
+      confidence: variant ? 'high' : 'medium',
+    };
+  }
+
+  if (/\b(nintendo\s*switch|switch\s*(oled|lite|2))\b/i.test(t)) {
+    const oled = /\boled\b/i.test(t);
+    const lite = /\blite\b/i.test(t);
+    const two = /\bswitch\s*2\b/i.test(t);
+    return {
+      brand: 'Nintendo',
+      line: 'Nintendo Switch',
+      generation: two ? '2' : null,
+      variant: oled ? 'OLED' : lite ? 'Lite' : null,
+      storageGb: null,
+      confidence: 'high',
+    };
+  }
+  return null;
+}
 
 /** Brands and product lines that actually identify a Windows laptop. */
 const PC_BRANDS = ['dell', 'hp', 'lenovo', 'acer', 'asus', 'msi', 'toshiba', 'razer', 'samsung', 'microsoft', 'alienware', 'gateway', 'huawei', 'lg'];
@@ -296,7 +378,7 @@ function finish(p: Omit<ParsedModel, 'key' | 'confidence'> & { key?: string; con
   if (p.line) parts.push(p.line);
   // Each line names itself in its own order: "iPhone 15 Pro Max", but
   // "iPad Air 4" and "Galaxy S23 Ultra".
-  if (p.line === 'iPhone') {
+  if (p.line === 'iPhone' || p.line === 'PlayStation') {
     if (p.generation) parts.push(p.generation);
     if (p.variant) parts.push(p.variant);
   } else if (p.line === 'Apple Watch') {
@@ -309,6 +391,7 @@ function finish(p: Omit<ParsedModel, 'key' | 'confidence'> & { key?: string; con
     if (p.variant) parts.push(p.variant);
     if (p.generation) parts.push(p.generation);
   }
+  if (p.edition) parts.push(p.edition);
   if (p.chip) parts.push(p.chip);
   if (p.sizeMm) parts.push(`${p.sizeMm}mm`);
   if (p.storageGb) parts.push(p.storageGb >= 1024 ? `${p.storageGb / 1024}TB` : `${p.storageGb}GB`);
@@ -340,6 +423,25 @@ export function modelFamily(title: string): string {
  * either side leaves it out, but "15 Pro" never matches "15 Pro Max", "15
  * Plus" or "13" — those cost hundreds of dollars apart.
  */
+/**
+ * Structural comparison. Brand, line, generation, trim and chip must agree
+ * exactly — those name the product. Edition and capacity are wildcards when
+ * either side leaves them out, because a seller who wrote "PS5 Slim" has not
+ * named a third console, only a vaguer one.
+ */
+export function modelsMatch(a: ParsedModel, b: ParsedModel): boolean {
+  const strict: Array<keyof ParsedModel> = ['line', 'generation', 'variant', 'chip'];
+  for (const f of strict) {
+    const [x, y] = [a[f], b[f]];
+    if ((x ?? null) !== (y ?? null)) return false;
+  }
+  for (const f of ['edition', 'storageGb'] as Array<keyof ParsedModel>) {
+    const [x, y] = [a[f] ?? null, b[f] ?? null];
+    if (x !== null && y !== null && x !== y) return false;
+  }
+  return true;
+}
+
 export function sameModel(a: string, b: string): boolean {
   const strip = (k: string) =>
     k
