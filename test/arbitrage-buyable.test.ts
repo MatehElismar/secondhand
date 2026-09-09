@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bucketize, filterBuyable } from '../src/arbitrage.js';
+import { bucketize, filterBuyable, modelKey, sameModel } from '../src/arbitrage.js';
 
 const price = (l: { priceNumeric: number }) => l.priceNumeric;
 
@@ -83,10 +83,41 @@ describe('filterBuyable', () => {
     expect(kept.some((l) => l.priceNumeric === 4200)).toBe(false);
   });
 
-  it('passes through untouched when there is too little data to judge', () => {
+  it('excludes bid-only auctions by default and admits them on request', () => {
+    const auction = {
+      title: 'Apple iPhone 15 Pro 256GB Unlocked',
+      priceNumeric: 300,
+      buyingOptions: ['AUCTION'],
+    };
+    const base = [phone(520), phone(540), phone(560), phone(580)];
+    expect(filterBuyable([...base, auction], price).kept).toHaveLength(4);
+    expect(filterBuyable([...base, auction], price, { includeAuctions: true }).kept).toHaveLength(5);
+  });
+
+  it('keeps an auction that also has Buy It Now', () => {
+    const bin = {
+      title: 'Apple iPhone 15 Pro 256GB Unlocked',
+      priceNumeric: 545,
+      buyingOptions: ['AUCTION', 'FIXED_PRICE'],
+    };
+    const kept = filterBuyable([phone(520), phone(540), phone(560), phone(580), bin], price).kept;
+    expect(kept).toHaveLength(5);
+  });
+
+  it('drops box-only and multi-unit lot listings', () => {
+    const base = [phone(520), phone(540), phone(560), phone(580)];
+    for (const title of ['Apple iPhone Retail Box Packaging Purple 128GB', 'Lot of 4 Smartphones Apple iPhone']) {
+      expect(filterBuyable([...base, { title, priceNumeric: 60 }], price).kept.map((l) => l.title)).not.toContain(title);
+    }
+  });
+
+  it('still drops accessories when the sample is too small for a median', () => {
+    // A narrow search (one auction window) can return two or three items. The
+    // median of those is meaningless, so the keyword has to decide alone —
+    // otherwise a $12 case becomes a candidate with a huge fake margin.
     const listings = [phone(500), { title: 'Case for iPhone 15', priceNumeric: 12 }];
     const { kept } = filterBuyable(listings, price);
-    expect(kept).toHaveLength(2);
+    expect(kept.map((l) => l.title)).toEqual(['Apple iPhone 15 Pro 256GB Unlocked']);
   });
 
   it('skips listings with no usable price', () => {
@@ -116,5 +147,29 @@ describe('bucketize', () => {
 
   it('returns an empty array for no prices', () => {
     expect(bucketize([])).toEqual([]);
+  });
+});
+
+describe('sameModel', () => {
+  it('matches the same generation regardless of stated storage', () => {
+    expect(sameModel('iPhone 15 Pro 256GB', 'iPhone 15 Pro')).toBe(true);
+    expect(sameModel('iPhone 15 Pro', 'iPhone 15 Pro 512GB')).toBe(true);
+  });
+
+  it('refuses a different generation or family', () => {
+    expect(sameModel('iPhone 13 128GB', 'iPhone 15 Pro')).toBe(false);
+    expect(sameModel('iPhone 15 Plus 128GB', 'iPhone 15 Pro')).toBe(false);
+    expect(sameModel('iPhone 15', 'iPhone 15 Pro')).toBe(false);
+  });
+
+  it('rejects the eBay cross-generation results seen in practice', () => {
+    const key = 'iPhone 15 Pro';
+    const strays = [
+      'Genuine Apple iPhone 13 128GB Black Unlocked',
+      'Apple iPhone 14 128GB Smartphone A2649',
+      'APPLE iPhone 15 Plus Smartphone 6.7in Unlocked 128GB',
+    ];
+    for (const t of strays) expect(sameModel(modelKey(t), key)).toBe(false);
+    expect(sameModel(modelKey('Apple iPhone 15 Pro 256GB Unlocked Very Good'), key)).toBe(true);
   });
 });

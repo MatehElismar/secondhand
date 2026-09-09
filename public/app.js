@@ -147,6 +147,16 @@ async function fillCoords() {
   }
 }
 
+/**
+ * The format selector folds "auction closing soon" into one option; the API
+ * takes it as a format plus a closing window.
+ */
+function buyingFormatParams() {
+  const v = $('#buyingFormat').value;
+  if (v === 'auction60') return { buyingFormat: 'auction', endingWithinMinutes: 60 };
+  return { buyingFormat: v };
+}
+
 async function runSearch(e) {
   e.preventDefault();
   const body = {
@@ -155,6 +165,7 @@ async function runSearch(e) {
     location: $('#location').value.trim() || undefined,
     radius: num($('#radius')), minPrice: num($('#minPrice')),
     maxPrice: num($('#maxPrice')), limit: num($('#limit')) || 40,
+    ...buyingFormatParams(),
   };
   $('#empty').hidden = true;
   $('#listings').innerHTML = '<p class="empty">Buscando…</p>';
@@ -271,6 +282,7 @@ async function runArbitrage(e) {
     radius: num($('#radius')), minPrice: num($('#minPrice')),
     maxPrice: num($('#maxPrice')), limit: num($('#limit')) || 40,
     topN: 3, minMatches: 3,
+    ...buyingFormatParams(),
   };
   const res = $('#arbRes');
   clearArbitrage();
@@ -436,6 +448,13 @@ function modelCardHtml(s, data) {
  * screen. Only real devices reach here; the API already strips accessories,
  * parts and lots from the buy side.
  */
+/** Short local date for an auction end time. */
+function fmtEnds(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  return d.toLocaleString('es', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
 function candidatesHtml(s, data) {
   const list = (s.candidates || []).filter((c) => c.url);
   if (!list.length) return '';
@@ -454,7 +473,7 @@ function candidatesHtml(s, data) {
         ${c.image ? `<img class="arb-buy-img" loading="lazy" src="${escapeAttr(c.image)}" alt="" onerror="this.style.visibility='hidden'" />` : '<span class="arb-buy-img"></span>'}
         <span class="arb-buy-main">
           <span class="arb-buy-title">${escape(c.title)}</span>
-          <span class="arb-buy-meta">${escape(c.condition || 'condición no informada')}${c.seller ? ' · ' + escape(c.seller) : ''}</span>
+          <span class="arb-buy-meta">${c.auction ? '<span class="tag-auction">SUBASTA</span> ' : ''}${escape(c.condition || 'condición no informada')}${c.seller ? ' · ' + escape(c.seller) : ''}${c.auction ? ` · ${c.bidCount ?? 0} puja(s)${c.endsAt ? ' · cierra ' + escape(fmtEnds(c.endsAt)) : ''}` : ''}</span>
         </span>
         <span class="arb-buy-nums">
           <span class="arb-buy-price">${usd(c.priceUsd)}</span>
@@ -462,7 +481,9 @@ function candidatesHtml(s, data) {
         </span>
       </a>`;
     }).join('')}
-    <div class="arb-buys-foot">Precio de compra y margen por unidad ya con fee y envío. Verifica condición, bloqueo y envío antes de comprar.</div>
+    <div class="arb-buys-foot">${show.some((c) => c.auction)
+      ? 'En subastas el precio es la <b>puja actual</b>, no lo que pagarás: el margen sube o desaparece con cada puja. '
+      : ''}Precio de compra y margen por unidad ya con fee y envío. Verifica condición, bloqueo y envío antes de comprar.</div>
   </div>`;
 }
 

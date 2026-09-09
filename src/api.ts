@@ -59,6 +59,12 @@ const listingProps: Record<string, unknown> = {
   condition: { type: 'string' },
   marketplace: { type: 'string' },
   scrapedAt: { type: 'string' },
+  // eBay buying format. Undeclared properties are stripped on serialization,
+  // so anything a client needs to see has to be listed here.
+  buyingOptions: { type: 'array', items: { type: 'string' } },
+  bidCount: { type: 'number' },
+  endsAt: { type: 'string' },
+  auctionOnly: { type: 'boolean' },
 };
 
 const resolvedLocationProps: Record<string, unknown> = {
@@ -289,6 +295,18 @@ export async function buildApiServer(): Promise<FastifyInstance> {
             limit: { type: 'number', minimum: 1 },
             offset: { type: 'number', minimum: 0 },
             showSold: { type: 'boolean' },
+            buyingFormat: {
+              type: 'string',
+              enum: ['any', 'fixed', 'auction'],
+              description:
+                "eBay buying format: 'fixed' excludes bidding, 'auction' returns only biddable items (price shown is the current bid), 'any' leaves eBay's ranking alone.",
+            },
+            endingWithinMinutes: {
+              type: 'number',
+              minimum: 1,
+              description:
+                'With buyingFormat=auction: only bids closing within this many minutes. Near close the current bid approximates the final price.',
+            },
             sort: { type: 'string', description: 'Sort order (Depop, Poshmark)' },
             condition: { type: 'string' },
             category: { type: 'string' },
@@ -350,6 +368,8 @@ export async function buildApiServer(): Promise<FastifyInstance> {
         limit,
         offset,
         showSold,
+        buyingFormat,
+        endingWithinMinutes,
         sort,
         condition,
         category,
@@ -385,6 +405,8 @@ export async function buildApiServer(): Promise<FastifyInstance> {
         limit: optNum(limit),
         offset: optNum(offset),
         showSold: optBool(showSold),
+        buyingFormat: buyingFormat as SearchParams['buyingFormat'],
+        endingWithinMinutes: optNum(endingWithinMinutes),
         sort: sort as SearchParams['sort'],
         condition: condition as SearchParams['condition'],
         category: category as string | undefined,
@@ -453,6 +475,19 @@ export async function buildApiServer(): Promise<FastifyInstance> {
             limit: { type: 'number', default: 40 },
             topN: { type: 'number', default: 3 },
             minMatches: { type: 'number', default: 3 },
+            buyingFormat: {
+              type: 'string',
+              enum: ['any', 'fixed', 'auction'],
+              default: 'fixed',
+              description:
+                "Buy-side buying format (eBay). 'fixed' (default) only items purchasable at a known price; 'auction' only biddable items, whose price is the current bid and will rise; 'any' leaves the marketplace ranking alone.",
+            },
+            endingWithinMinutes: {
+              type: 'number',
+              minimum: 1,
+              description:
+                'With buyingFormat=auction: only bids closing within this many minutes. Near close the current bid approximates the final price.',
+            },
           },
         },
       },
@@ -474,6 +509,8 @@ export async function buildApiServer(): Promise<FastifyInstance> {
           limit: body.limit as number | undefined,
           topN: body.topN as number | undefined,
           minMatches: body.minMatches as number | undefined,
+          buyingFormat: body.buyingFormat as 'any' | 'fixed' | 'auction' | undefined,
+          endingWithinMinutes: body.endingWithinMinutes as number | undefined,
         });
         return result;
       } catch (error) {
@@ -567,6 +604,8 @@ type bodyShape = {
   limit?: number;
   offset?: number;
   showSold?: boolean;
+  buyingFormat?: 'any' | 'fixed' | 'auction';
+  endingWithinMinutes?: number;
   sort?: string;
   condition?: string;
   category?: string;

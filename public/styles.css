@@ -389,3 +389,11 @@ button:hover { filter: brightness(1.1); }
   font-variant-numeric: tabular-nums; margin-top: 3px;
 }
 .arb-hero-stat .v.pos { color: var(--good); }
+
+/* Auction listings: the price shown is a live bid, not a purchase price */
+.tag-auction {
+  display: inline-block; font-size: 9.5px; font-weight: 800; letter-spacing: .06em;
+  color: #2a1806; background: var(--warn); border-radius: 4px; padding: 1px 5px;
+  vertical-align: 1px;
+}
+.arb-buy.auction { border-style: dashed; }

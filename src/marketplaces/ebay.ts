@@ -119,7 +119,10 @@ export class EbayMarketplace extends BaseMarketplace {
   }
 
   async search(params: SearchParams): Promise<SearchResult> {
-    const { query, maxPrice, minPrice, condition, limit = 20, offset = 0 } = params;
+    const {
+      query, maxPrice, minPrice, condition, buyingFormat, endingWithinMinutes,
+      limit = 20, offset = 0,
+    } = params;
 
     if (!this.clientId || !this.clientSecret) {
       return this.createError(
@@ -144,6 +147,20 @@ export class EbayMarketplace extends BaseMarketplace {
         if (ebayCondition) {
           filters.push(`conditions:{${ebayCondition}}`);
         }
+      }
+      // Browse's default ranking buries auctions almost entirely, so asking for
+      // them has to be explicit; 'fixed' conversely guarantees none slip in.
+      if (buyingFormat === 'auction') {
+        filters.push('buyingOptions:{AUCTION}');
+        if (endingWithinMinutes != null && endingWithinMinutes > 0) {
+          // Browse rejects sub-second precision, and a window starting "now"
+          // races the request, so open it a minute out.
+          const stamp = (ms: number) =>
+            new Date(Date.now() + ms).toISOString().replace(/\.\d{3}Z$/, '.000Z');
+          filters.push(`itemEndDate:[${stamp(60_000)}..${stamp(endingWithinMinutes * 60_000)}]`);
+        }
+      } else if (buyingFormat === 'fixed') {
+        filters.push('buyingOptions:{FIXED_PRICE}');
       }
       const filterParam = filters.length > 0 ? filters.join(',') : undefined;
 
@@ -281,9 +298,15 @@ export class EbayMarketplace extends BaseMarketplace {
       try {
         // Browse gives amount and currency as separate fields, so only the
         // amount needs parsing; the currency is already known.
-        const currency = item.price?.currency ? currencySymbol(item.price.currency) : undefined;
-        const priceStr = item.price ? `${currency}${item.price.value}` : 'Price not listed';
-        const parsed = item.price ? this.parsePrice(String(item.price.value)) : null;
+        // A bid-only auction carries no `price`; its amount lives in
+        // currentBidPrice. Without this the item arrives priced "$undefined"
+        // and silently drops out of every downstream statistic.
+        const buyingOptions: string[] = Array.isArray(item.buyingOptions) ? item.buyingOptions : [];
+        const auctionOnly = buyingOptions.includes('AUCTION') && !buyingOptions.includes('FIXED_PRICE');
+        const amount = item.price?.value != null ? item.price : item.currentBidPrice;
+        const currency = amount?.currency ? currencySymbol(amount.currency) : undefined;
+        const priceStr = amount?.value != null ? `${currency}${amount.value}` : 'Price not listed';
+        const parsed = amount?.value != null ? this.parsePrice(String(amount.value)) : null;
 
         // Only grab primary image for search results; full set via getListingDetails
         const images: string[] = [];
@@ -307,6 +330,10 @@ export class EbayMarketplace extends BaseMarketplace {
           seller: item.seller?.username,
           marketplace: this.name,
           scrapedAt: new Date().toISOString(),
+          buyingOptions: buyingOptions.length > 0 ? buyingOptions : undefined,
+          bidCount: typeof item.bidCount === 'number' ? item.bidCount : undefined,
+          endsAt: item.itemEndDate,
+          auctionOnly: auctionOnly || undefined,
         });
       } catch {
         continue;

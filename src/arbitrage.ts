@@ -53,6 +53,14 @@ export interface ArbitrageOptions {
   limit?: number;
   topN?: number;
   minMatches?: number;
+  /**
+   * Buying format for the BUY-side search. Default 'fixed': only items that can
+   * actually be bought at a known price. 'auction' hunts bids (margins are then
+   * provisional), 'any' leaves the marketplace's own ranking alone.
+   */
+  buyingFormat?: 'any' | 'fixed' | 'auction';
+  /** With buyingFormat 'auction': only bids closing within this many minutes. */
+  endingWithinMinutes?: number;
 }
 
 export function toUsd(n: number | undefined, currency?: string): number | null {
@@ -151,7 +159,7 @@ export function groupStats(listings: any[]): GroupStat[] {
  * phone), so callers pair it with a price test — see filterBuyable.
  */
 const ACCESSORY_RE =
-  /\b(case|cover|funda|carcasa|skin|sticker|bumper|wallet|holster|screen protector|protector de pantalla|tempered glass|mica|charger|cargador|cable|adapter|adaptador|earpods|airpods|headphone|headset|auricular|lcd|oled|digitizer|back glass|housing|frame|flex|connector|motherboard|logic board|camera replacement|replacement (kit|part|screen|battery|display)|repair (kit|part)|repuesto|holder|mount|stand|tripod|lens protector|grip|strap|empty box|box only|caja vac)/i;
+  /\b(case|cover|funda|carcasa|skin|sticker|bumper|wallet|holster|screen protector|protector de pantalla|tempered glass|mica|charger|cargador|cable|adapter|adaptador|earpods|airpods|headphone|headset|auricular|lcd|oled|digitizer|back glass|housing|frame|flex|connector|motherboard|logic board|camera replacement|replacement (kit|part|screen|battery|display)|repair (kit|part)|repuesto|holder|mount|stand|tripod|lens protector|grip|strap|empty box|box only|caja vac|retail box|packaging|lot of \d+)/i;
 
 /**
  * Explicitly dead, damaged or carrier-locked units — never a "good" buy
@@ -162,6 +170,30 @@ const BROKEN_RE =
   /\b(for parts|parts only|not working|no funciona|broken|roto|cracked|crack|damaged|dañad|(heavy|deep|bad|major|lots of)\s+scratch|scratched|rough condition|poor condition|as is|as-is|bad esn|bad imei|icloud lock|activation lock|blacklisted|no power|does not|doesn'?t work|read description|carrier locked|locked to|network locked|(t-?mobile|at&t|verizon|sprint|cricket|boost|metropcs) only)\b/i;
 
 const isPartsLike = (l: any) => BROKEN_RE.test(String(l?.title || '')) || BROKEN_RE.test(String(l?.condition || ''));
+
+/**
+ * A bid-only auction is priced at the CURRENT BID, which is not what the item
+ * will cost — it only goes up, and the listing cannot be bought today. Costing
+ * a margin off it invents profit that expires with the next bid.
+ */
+const isAuctionOnly = (l: any) =>
+  l?.auctionOnly === true ||
+  (Array.isArray(l?.buyingOptions) &&
+    l.buyingOptions.includes('AUCTION') &&
+    !l.buyingOptions.includes('FIXED_PRICE'));
+
+/**
+ * Same device family and generation? Storage is ignored when either side does
+ * not state it, but "15 Pro" never matches "15 Plus" or "13".
+ *
+ * eBay keyword search is loose: asking for "iPhone 15 Pro" returns iPhone 13
+ * and 14 units. Costing a margin off those compares two different phones.
+ */
+export function sameModel(a: string, b: string): boolean {
+  const norm = (k: string) => k.toLowerCase().replace(/\s*\d+(gb|tb)\b/g, '').replace(/\s+/g, ' ').trim();
+  const [x, y] = [norm(a), norm(b)];
+  return x === y;
+}
 
 /**
  * Drop listings that are not the product itself. eBay keyword search for
@@ -175,21 +207,28 @@ const isPartsLike = (l: any) => BROKEN_RE.test(String(l?.title || '')) || BROKEN
 export function filterBuyable<T extends { title?: string; priceNumeric?: number; condition?: string }>(
   listings: T[],
   priceOf: (l: T) => number | null,
+  { includeAuctions = false }: { includeAuctions?: boolean } = {},
 ): { kept: T[]; dropped: number } {
   const withPrice = listings.filter((l) => {
+    if (!includeAuctions && isAuctionOnly(l)) return false;
     const p = priceOf(l);
     return p != null && p > 0;
   });
-  if (withPrice.length < 4) return { kept: withPrice, dropped: listings.length - withPrice.length };
 
-  const rawMedian = statsOf(withPrice.map((l) => priceOf(l) as number)).median ?? 0;
+  // Enough of a sample for the median to mean anything? A narrow search — one
+  // auction window, say — can return three items, and the median of three
+  // phone cases is a phone case.
+  const trustworthy = withPrice.length >= 4;
+  const rawMedian = trustworthy ? statsOf(withPrice.map((l) => priceOf(l) as number)).median ?? 0 : 0;
 
   const passA = withPrice.filter((l) => {
     if (isPartsLike(l)) return false;
-    const p = priceOf(l) as number;
     const looksAccessory = ACCESSORY_RE.test(String(l.title || ''));
-    // Only trust the keyword when the price agrees it is not the device.
-    return !(looksAccessory && p < rawMedian * 0.6);
+    if (!looksAccessory) return true;
+    // With a usable median, let the price vouch for a device that merely
+    // mentions an accessory. Without one, the keyword decides alone: dropping a
+    // real phone is a smaller error than pricing a margin off a $4 case.
+    return trustworthy && (priceOf(l) as number) >= rawMedian * 0.6;
   });
   if (passA.length < 4) return { kept: passA, dropped: listings.length - passA.length };
 
@@ -231,6 +270,8 @@ export async function runArbitrage(opts: ArbitrageOptions) {
   const limit = opts.limit || 40;
   const topN = opts.topN || 3;
   const minMatches = opts.minMatches || 3;
+  const buyingFormat = opts.buyingFormat || 'fixed';
+  const includeAuctions = buyingFormat !== 'fixed';
 
   const primary = getMarketplace(marketplace);
   const secondary = getMarketplace(secondaryName);
@@ -266,11 +307,17 @@ export async function runArbitrage(opts: ArbitrageOptions) {
   for (const s of top) {
     let secondaryInfo: any = { count: 0, sample: 0, usd: null, listings: [], buyable: [], excluded: 0, error: undefined };
     if (secondary) {
-      const secResult = await secondary.search({ query: s.key, limit });
+      const secResult = await secondary.search({
+        query: s.key, limit, buyingFormat, endingWithinMinutes: opts.endingWithinMinutes,
+      });
       const secListings = secResult.listings || [];
       // Price the buy side off real units only — accessories and parts would
       // otherwise pull the median down and invent profit that is not there.
-      const { kept, dropped } = filterBuyable(secListings, (l: any) => toUsd(l.priceNumeric, l.currency));
+      const { kept, dropped } = filterBuyable(
+        secListings,
+        (l: any) => toUsd(l.priceNumeric, l.currency),
+        { includeAuctions },
+      );
       const secPriced = kept.map((l: any) => toUsd(l.priceNumeric, l.currency)).filter((v): v is number => v != null && v > 0);
       secondaryInfo = {
         count: secListings.length,
@@ -300,6 +347,12 @@ export async function runArbitrage(opts: ArbitrageOptions) {
       .map((l) => {
         const buy = toUsd(l.priceNumeric, l.currency);
         if (buy == null) return null;
+        // An independent sanity check: nothing selling locally for $500 is
+        // being bought for $6. This holds even when the buy-side sample is far
+        // too small for its own median to be worth anything.
+        if (sellMedian != null && buy < sellMedian * 0.35) return null;
+        // And it has to be the same phone we are pricing.
+        if (!sameModel(modelKey(String(l.title || '')), s.key)) return null;
         const unitNet =
           sellMedian != null ? sellMedian - buy - sellMedian * SELL_FEE_RATE - SHIPPING_COST_USD : null;
         return {
@@ -310,6 +363,9 @@ export async function runArbitrage(opts: ArbitrageOptions) {
           seller: l.seller ?? null,
           url: l.url,
           image: (l.images || [])[0] ?? null,
+          auction: isAuctionOnly(l) || undefined,
+          bidCount: l.bidCount ?? undefined,
+          endsAt: l.endsAt ?? undefined,
           netUsd: dollar(unitNet),
         };
       })
@@ -336,6 +392,8 @@ export async function runArbitrage(opts: ArbitrageOptions) {
   return {
     primaryMarket: marketplace,
     secondaryMarket: secondaryName,
+    buyingFormat,
+    endingWithinMinutes: opts.endingWithinMinutes,
     query: opts.query,
     location: opts.location,
     radius: opts.radius,
