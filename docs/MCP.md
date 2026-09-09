@@ -146,6 +146,15 @@ printf '%s\n' \
 | `EBAY_MARKETPLACE_ID` | Regional site, e.g. `EBAY_US` (default) |
 | `SMARTPROXY_URL` | Optional residential proxy URL for Facebook |
 | `PUPPETEER_EXECUTABLE_PATH` | Chrome path for Depop/Poshmark (auto-detected otherwise) |
+| `FB_COOKIE` / `FB_DTSG` / `FB_LSD` | Logged-in Facebook session (see below) |
+
+### Facebook: real feed and pagination
+
+Without a session, Facebook returns a gated/empty feed and the server falls back
+to a single logged-out HTML page (~24 results). Setting `FB_COOKIE` (+ `FB_DTSG`/
+`FB_LSD`) makes the GraphQL feed come back real, and keyword searches then
+**paginate** past 24 (up to a bounded number of pages). Export these from your
+browser and keep them in a local `.env` (not committed).
 
 Marketplaces that cannot run on the machine are omitted automatically: eBay needs
 keys; Depop and Poshmark need Chrome/Chromium.

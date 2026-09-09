@@ -32,6 +32,24 @@ Marketplace selection and credentials come from the same env vars the MCP server
 uses (`MARKETPLACES`, `EBAY_CLIENT_ID`/`SECRET`, `SMARTPROXY_URL`,
 `PUPPETEER_EXECUTABLE_PATH`) — see [../README.md](../README.md).
 
+### Optional Facebook session (unlocks the real feed + pagination)
+
+Facebook returns a **gated/empty** search feed to unauthenticated callers (so the
+adapter falls back to one logged-out HTML page of ~24 results). To get the real
+feed and paginate past 24, provide a logged-in session:
+
+| Env var | Description |
+|---------|-------------|
+| `FB_COOKIE` | The `cookie:` header of a logged-in `/api/graphql` request |
+| `FB_DTSG` / `FB_LSD` | `fb_dtsg` / `lsd` form fields from that request |
+| `FB_USER` / `FB_JAZOEST` | `__user` / `jazoest` (optional) |
+
+Keep these local/secret (`.env` is gitignored). With a session, a keyword search
+paginates via Facebook's cursor API up to a bounded number of pages (~120).
+
+**Running with `.env`:** the `npm run api` script loads `.env` automatically
+(`node --env-file-if-exists=.env dist/api.js`).
+
 ## Endpoints
 
 | Method | Path | Description |
@@ -237,6 +255,12 @@ marketplace has no listing-details support.
 - **Currency is the seller's**: Facebook returns prices in the local currency
   (e.g. `DOP`) as the seller entered them. Price filters are applied by the
   marketplace in that currency, not in USD.
+- **Facebook result cap**: a single keyword search is paginated in 24-item pages
+  via Facebook's cursor-based `SearchContentPaginationQuery`, up to a bounded
+  number of pages (~120 listings). If Facebook returns its *gated* response (0
+  items but "has next page"), the adapter falls back to reading the server-side
+  search page (single page, ~24 items) — this is the normal behavior when the IP
+  is rate-limited; a residential proxy (`SMARTPROXY_URL`) reduces it.
 - **Facebook location resolution is non-deterministic** for non-US places. It is
   based on Facebook's check-in-ranked location search, so the same query can
   resolve differently between calls (the API surfaces the exact value it used).
