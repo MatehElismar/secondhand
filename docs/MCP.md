@@ -153,8 +153,14 @@ printf '%s\n' \
 Without a session, Facebook returns a gated/empty feed and the server falls back
 to a single logged-out HTML page (~24 results). Setting `FB_COOKIE` (+ `FB_DTSG`/
 `FB_LSD`) makes the GraphQL feed come back real, and keyword searches then
-**paginate** past 24 (up to a bounded number of pages). Export these from your
-browser and keep them in a local `.env` (not committed).
+**paginate** past 24 (up to a bounded number of pages).
+
+Capture them with one login: `npm run fb:session` opens a dedicated Chrome
+window; complete the login there and it writes the `FB_*` values into `.env`.
+The profile persists in `.fb-session/` (gitignored), so you don't log in again.
+Keep `.env` and `.fb-session/` private — they hold your live session. If a next
+page comes back gated/errored, pagination stops and the gathered results are
+returned (partial success) rather than failing the whole search.
 
 Marketplaces that cannot run on the machine are omitted automatically: eBay needs
 keys; Depop and Poshmark need Chrome/Chromium.

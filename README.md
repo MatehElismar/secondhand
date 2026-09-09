@@ -355,7 +355,8 @@ npm run build
 | `npm test` | Run the Vitest suite |
 | `npm run dev` | Run the MCP server from source (ts-node; see note below) |
 | `npm start` | Run the MCP server from `dist/` |
-| `npm run api` | Build then start the REST API on `:3000` |
+| `npm run api` | Build then start the REST API on `:3000` (loads `.env` if present) |
+| `npm run fb:session` | One-time Facebook login flow → writes `FB_*` into `.env` |
 
 > **Note on `npm run dev` / ts-node** — the source uses NodeNext ESM with `*.js`
 > import specifiers, which the bundled `ts-node` version cannot resolve under
@@ -372,7 +373,33 @@ without any dependency:
 node --env-file=.env dist/api.js
 ```
 
-A commented `/ .env.example` lists every supported variable.
+`npm run api` already loads `.env` automatically
+(`node --env-file-if-exists=.env dist/api.js`). A commented `/ .env.example`
+lists every supported variable.
+
+### Facebook session (optional, unlocks the real feed + pagination)
+
+Facebook returns a gated/empty search feed to unauthenticated callers, so the
+server falls back to a single logged-out HTML page (~24 results). Providing a
+logged-in session makes the GraphQL feed come back real, and keyword searches
+then **paginate** past 24 items.
+
+Log in **once** to capture it automatically:
+
+```bash
+npm run fb:session
+```
+
+This opens a dedicated Chrome window; complete the login there and the script
+writes `FB_COOKIE`, `FB_DTSG`, `FB_LSD`, `FB_USER`, `FB_JAZOEST` into `.env`.
+It reads the session cookies (including the HttpOnly ones) via `page.cookies()`
+plus `fb_dtsg`/`lsd` from a `/api/graphql` request, and keeps a persistent
+profile in `.fb-session/` (gitignored) so you don't log in again.
+
+Keep `.env` and `.fb-session/` private — they contain your live session. See
+[`docs/MCP.md`](./docs/MCP.md) and [`docs/REST-API.md`](./docs/REST-API.md) for
+the env vars and the pagination/gating behavior. Note this is unofficial
+scraping of Facebook's internal GraphQL; use at your own account risk.
 
 ## Docker
 

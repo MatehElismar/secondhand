@@ -47,8 +47,18 @@ feed and paginate past 24, provide a logged-in session:
 Keep these local/secret (`.env` is gitignored). With a session, a keyword search
 paginates via Facebook's cursor API up to a bounded number of pages (~120).
 
+**Capture them with one login:** run `npm run fb:session` — it opens a dedicated
+Chrome window, you log in once, and it writes the `FB_*` values into `.env`
+(cookies via `page.cookies()`, incl. HttpOnly, plus `fb_dtsg`/`lsd` from a
+`/api/graphql` request). The profile persists in `.fb-session/` (gitignored), so
+you don't log in again.
+
 **Running with `.env`:** the `npm run api` script loads `.env` automatically
 (`node --env-file-if-exists=.env dist/api.js`).
+
+When a next page comes back gated/errored (an HTML page), pagination stops and
+the results already collected are returned (partial success) instead of failing
+the whole search.
 
 ## Endpoints
 
