@@ -29,6 +29,7 @@ import {
   getMarketplace,
   getAllMarketplaces,
 } from './marketplaces/index.js';
+import { runArbitrage } from './arbitrage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { SearchParams, ListingDetails, LocationCoordinates } from './types.js';
@@ -115,6 +116,7 @@ export async function buildApiServer(): Promise<FastifyInstance> {
         { name: 'locations', description: 'Resolve place names to coordinates' },
         { name: 'search', description: 'Search live listings on a marketplace' },
         { name: 'listings', description: 'Fetch full details for one listing' },
+        { name: 'arbitrage', description: 'Cross-market price comparison + profit estimate' },
       ],
     },
   });
@@ -426,6 +428,57 @@ export async function buildApiServer(): Promise<FastifyInstance> {
         ...(result.error ? { error: result.error } : {}),
         ...(result.note ? { note: result.note } : {}),
       };
+    }
+  );
+
+  // ── Arbitrage analysis ───────────────────────────────────────────────
+  app.post<{ Body: Record<string, unknown> }>(
+    '/v1/arbitrage',
+    {
+      schema: {
+        tags: ['arbitrage'],
+        summary: 'Cross-market arbitrage analysis',
+        description:
+          'Searches the primary marketplace, groups found listings by product/model, picks the top models by count (min. matches), then compares each against the other marketplace. Prices are normalized to USD (DOP -> USD). Returns distribution stats, per-model summaries, and a delta/profit estimate.',
+        body: {
+          type: 'object',
+          required: ['query'],
+          properties: {
+            marketplace: { type: 'string', default: 'facebook' },
+            query: { type: 'string' },
+            location: { type: 'string' },
+            radius: { type: 'number' },
+            minPrice: { type: 'number' },
+            maxPrice: { type: 'number' },
+            limit: { type: 'number', default: 40 },
+            topN: { type: 'number', default: 3 },
+            minMatches: { type: 'number', default: 3 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const body = request.body as Record<string, unknown>;
+      const query = body.query;
+      if (!query || typeof query !== 'string') {
+        return reply.code(400).send({ error: 'Missing required parameter: query' });
+      }
+      try {
+        const result = await runArbitrage({
+          marketplace: (body.marketplace as string) || 'facebook',
+          query,
+          location: body.location as string | undefined,
+          radius: body.radius as number | undefined,
+          minPrice: body.minPrice as number | undefined,
+          maxPrice: body.maxPrice as number | undefined,
+          limit: body.limit as number | undefined,
+          topN: body.topN as number | undefined,
+          minMatches: body.minMatches as number | undefined,
+        });
+        return result;
+      } catch (error) {
+        return reply.code(502).send({ error: `Arbitrage analysis failed: ${error}` });
+      }
     }
   );
 

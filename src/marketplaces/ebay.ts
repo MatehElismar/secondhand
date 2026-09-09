@@ -9,8 +9,12 @@
 import { BaseMarketplace } from './base.js';
 import { SearchParams, SearchResult, Listing, ListingDetails } from '../types.js';
 
-const TOKEN_URL = 'https://api.ebay.com/identity/v1/oauth2/token';
-const BROWSE_API_URL = 'https://api.ebay.com/buy/browse/v1';
+// Production by default; set EBAY_SANDBOX=true (or 1/yes) to use the sandbox
+// (api.sandbox.ebay.com), which is where sandbox keys (SBX-...) belong.
+const isSandbox = () => /^(1|true|yes)$/i.test(String(process.env.EBAY_SANDBOX || '').trim());
+const API_HOST = () => (isSandbox() ? 'api.sandbox.ebay.com' : 'api.ebay.com');
+const TOKEN_URL = () => `https://${API_HOST()}/identity/v1/oauth2/token`;
+const BROWSE_API_URL = () => `https://${API_HOST()}/buy/browse/v1`;
 const OAUTH_SCOPE = 'https://api.ebay.com/oauth/api_scope';
 
 // eBay Browse API pagination limits: max 200 items per request, and
@@ -75,6 +79,9 @@ export class EbayMarketplace extends BaseMarketplace {
   private readonly _clientId: string | undefined;
   private readonly _clientSecret: string | undefined;
   private readonly _marketplaceId: string;
+  private readonly _tokenUrl: string;
+  private readonly _browseApiUrl: string;
+  private readonly _sandbox: boolean;
 
   constructor(credentials?: EbayCredentials) {
     super();
@@ -82,6 +89,17 @@ export class EbayMarketplace extends BaseMarketplace {
     this._clientSecret = credentials?.clientSecret ?? process.env.EBAY_CLIENT_SECRET;
     this._marketplaceId =
       credentials?.marketplaceId ?? process.env.EBAY_MARKETPLACE_ID ?? 'EBAY_US';
+    // Sandbox app IDs embed "SBX-" (e.g. "JulioPea-eBay-SBX-…") and only
+    // authenticate against the api.sandbox.ebay.com endpoints. Also honor an
+    // explicit EBAY_SANDBOX=true env override.
+    const sbx = (this._clientId ?? '').includes('-SBX-') || (this._clientId ?? '').startsWith('SBX-');
+    this._sandbox = sbx || isSandbox();
+    this._tokenUrl = this._sandbox
+      ? 'https://api.sandbox.ebay.com/identity/v1/oauth2/token'
+      : TOKEN_URL();
+    this._browseApiUrl = this._sandbox
+      ? 'https://api.sandbox.ebay.com/buy/browse/v1'
+      : BROWSE_API_URL();
   }
 
   private get clientId(): string | undefined {
@@ -152,7 +170,7 @@ export class EbayMarketplace extends BaseMarketplace {
         }
 
         const response = await fetch(
-          `${BROWSE_API_URL}/item_summary/search?${searchParams.toString()}`,
+          `${this._browseApiUrl}/item_summary/search?${searchParams.toString()}`,
           {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -204,7 +222,7 @@ export class EbayMarketplace extends BaseMarketplace {
     // Listing URLs show a bare number; the Browse API wants "v1|123456|0".
     const apiItemId = /^\d+$/.test(itemId) ? `v1|${itemId}|0` : itemId;
 
-    const response = await fetch(`${BROWSE_API_URL}/item/${encodeURIComponent(apiItemId)}`, {
+    const response = await fetch(`${this._browseApiUrl}/item/${encodeURIComponent(apiItemId)}`, {
       headers: {
         Authorization: `Bearer ${token}`,
         'X-EBAY-C-MARKETPLACE-ID': this._marketplaceId,
@@ -304,7 +322,7 @@ export class EbayMarketplace extends BaseMarketplace {
 
     const credentials = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
 
-    const response = await fetch(TOKEN_URL, {
+    const response = await fetch(this._tokenUrl, {
       method: 'POST',
       headers: {
         Authorization: `Basic ${credentials}`,

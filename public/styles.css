@@ -67,5 +67,22 @@ button:hover { filter: brightness(1.08); }
 .stats th, .stats td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .stats th { color: var(--muted); font-weight: 600; }
 .stats td:not(:first-child) { text-align: right; }
+.arb-dist { margin-top: 6px; font-size: 12px; }
+.arb-head { color: var(--muted); margin-bottom: 6px; }
+.arb-barline { display: flex; align-items: center; gap: 8px; }
+.arb-label { width: 110px; color: var(--muted); }
+.arb-bar { color: var(--accent); letter-spacing: 1px; }
+.arb-n { color: var(--muted); }
+.arb-model { background: #0d0f14; border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-top: 12px; }
+.arb-model-title { font-weight: 700; margin-bottom: 8px; }
+.arb-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.arb-col { font-size: 13px; }
+.arb-col-title { color: var(--muted); margin-bottom: 3px; }
+.arb-comparison { margin-top: 8px; font-size: 13px; }
+.arb-comparison .pos { color: var(--accent2); }
+.arb-comparison .neg { color: var(--warn); }
+.arb-fee { color: var(--muted); font-size: 11px; }
+.arb-link { color: var(--accent); text-decoration: none; font-size: 13px; }
+.arb-link:hover { text-decoration: underline; }
 .empty { color: var(--muted); text-align: center; padding: 30px; }
 .hint { border-color: var(--accent); }

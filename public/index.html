@@ -48,6 +48,7 @@
           <div class="row">
             <button type="submit" id="go">Buscar</button>
             <button type="button" id="resolveLoc" class="ghost">Resolver ubicación</button>
+            <button type="button" id="goArb" class="ghost">Arbitraje (cross-market) ↗</button>
             <span id="coords" class="coords"></span>
           </div>
         </form>
@@ -81,6 +82,15 @@
       <section class="card hint" id="ebayHint" hidden>
         <h2>Comparar con eBay</h2>
         <p id="ebayMsg"></p>
+      </section>
+
+      <section class="card" id="arbitrage">
+        <div class="cardhead">
+          <h2>Arbitraje (cross-market)</h2>
+          <span id="arbTotals" class="pill"></span>
+        </div>
+        <div id="arbRes"></div>
+        <p id="arbNote" class="note"></p>
       </section>
     </main>
 

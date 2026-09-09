@@ -261,6 +261,50 @@ describe('POST /v1/search', () => {
   });
 });
 
+describe('POST /v1/arbitrage', () => {
+  const item = (title: string, priceNumeric: number, currency = 'DOP') => ({
+    id: Math.random().toString(36).slice(2),
+    title,
+    price: `${currency}${priceNumeric}`,
+    priceNumeric,
+    currency,
+    url: 'https://example.com/' + Math.random().toString(36).slice(2),
+    marketplace: 'facebook',
+    scrapedAt: '2026-01-01T00:00:00.000Z',
+  });
+
+  it('groups, filters by min matches, selects top N and computes comparison', async () => {
+    h.list = [
+      // 4 x iPhone 15 (eligible), 3 x iPad Air (eligible), 2 x iPad Pro (excluded)
+      ...Array.from({ length: 4 }, () => item('iPhone 15 128GB azul', 25000)),
+      ...Array.from({ length: 3 }, () => item('iPad Air 4 64GB', 24000)),
+      ...Array.from({ length: 2 }, () => item('iPad Pro 11 128GB', 30000)),
+    ];
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/arbitrage',
+      payload: { marketplace: 'facebook', query: 'iphone', topN: 3, minMatches: 3 },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.primaryMarket).toBe('facebook');
+    expect(body.secondaryMarket).toBe('ebay');
+    expect(body.totals.listingsCount).toBe(9);
+    // Only iPhone 15 (4) and iPad Air (3) qualify (iPad Pro has 2).
+    expect(body.selected.map((s: any) => s.key)).toEqual(['iPhone 15 128GB', 'iPad Air 64GB']);
+    // eBay is a stub that returns no listings → delta null, handled gracefully.
+    expect(body.selected[0].secondary.error).toBeUndefined();
+    expect(body.selected[0].comparison.deltaUsd).toBe(null);
+    // Prices normalized to USD (25000 DOP / 60 ≈ 417).
+    expect(body.selected[0].primary.median).toBe(Math.round(25000 / 60));
+  });
+
+  it('returns 400 without a query', async () => {
+    const res = await app.inject({ method: 'POST', url: '/v1/arbitrage', payload: {} });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
 describe('GET /v1/listings/:marketplace/:id', () => {
   it('returns the normalized listing details', async () => {
     h.detail = {

@@ -36,7 +36,7 @@ function modelKey(title) {
   if (/iphone/.test(t)) {
     let k = 'iPhone';
     const m = t.match(/iphone\s*(\d+)(?:\s*(pro|max|mini|plus|air|ultra))?/i);
-    if (m) k += ` ${m[1]}${m[2] ? ' ' + cap(m[2]) : ''}`.trim();
+    if (m) k += ` ${m[1]}${m[2] ? ' ' + cap(m[2]) : ''}`;
     if (/ultra/.test(t)) k += ' Ultra';
     return k + _storage(t);
   }
@@ -230,6 +230,85 @@ function showEbayHint(msg) {
   const h = $('#ebayHint'); h.hidden = false; $('#ebayMsg').textContent = msg;
 }
 
+// --- Arbitrage (use case #1): cross-market comparison via /v1/arbitrage -------
+async function runArbitrage(e) {
+  const body = {
+    marketplace: $('#marketplace').value,
+    query: $('#query').value.trim(),
+    location: $('#location').value.trim() || undefined,
+    radius: num($('#radius')), minPrice: num($('#minPrice')),
+    maxPrice: num($('#maxPrice')), limit: num($('#limit')) || 40,
+    topN: 3, minMatches: 3,
+  };
+  const res = $('#arbRes');
+  res.innerHTML = '<p class="empty">Analizando… (búsqueda + comparación, puede tardar)</p>';
+  $('#arbNote').textContent = '';
+  try {
+    const r = await fetch('/v1/arbitrage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await r.json();
+    if (r.status >= 400) throw new Error(data.error || ('HTTP ' + r.status));
+    renderArbitrage(data);
+  } catch (err) {
+    $('#arbNote').textContent = 'Error: ' + err.message;
+    res.innerHTML = '';
+  }
+}
+
+function renderArbitrage(data) {
+  const t = data.totals || {};
+  $('#arbTotals').textContent = `${t.listingsCount ?? 0} listings · ${t.modelCount ?? 0} modelos · mediana USD$${t.usd?.median ?? '—'}`;
+  $('#arbNote').textContent = 'Precios normalizados a USD (DOP→USD ÷60). Margen estimado (net) = eBay mediana − fees(13%) − envío($10) − FB mediana. Solo lectura: el link abre eBay para que tú pujes/veas.';
+
+  const res = $('#arbRes');
+  res.innerHTML = '';
+
+  // Distribution
+  const dist = t.distribution || [];
+  if (dist.length) {
+    const maxC = Math.max(...dist.map((b) => b.count));
+    const d = document.createElement('div');
+    d.className = 'arb-dist';
+    d.innerHTML = '<div class="arb-head">Distribución (USD)</div>' + dist.map((b) =>
+      `<div class="arb-barline"><span class="arb-label">$${b.from}–$${b.to}</span><span class="arb-bar">${'▇'.repeat(Math.round((b.count / (maxC || 1)) * 20))}</span><span class="arb-n">${b.count}</span></div>`
+    ).join('');
+    res.appendChild(d);
+  }
+
+  // Selected models side-by-side
+  for (const s of data.selected || []) {
+    const p = s.primary; const sec = s.secondary || {};
+    const em = (sec.usd || {}).median;
+    const c = s.comparison || {};
+    const pos = (c.netUsd ?? 0) > 0;
+    const card = document.createElement('div');
+    card.className = 'arb-model';
+    card.innerHTML = `
+      <div class="arb-model-title">${escape(s.key)} <span class="pill">${p.count ?? 0} en ${escape(data.primaryMarket)}</span></div>
+      <div class="arb-cols">
+        <div class="arb-col">
+          <div class="arb-col-title">${escape(data.primaryMarket)} (origen)</div>
+          <div>n=${p.count ?? 0} · mediana <b>$${p.median ?? '—'}</b></div>
+        </div>
+        <div class="arb-col">
+          <div class="arb-col-title">${escape(data.secondaryMarket)} (comparación)</div>
+          <div>n=${sec.count ?? 0} · mediana <b>$${em ?? '—'}</b> ${(sec.error ? '· <em>' + escape(sec.error) + '</em>' : '')}</div>
+        </div>
+      </div>
+      <div class="arb-comparison">
+        Delta <b>$${c.deltaUsd ?? '—'}</b> · Ganancia neta est. <b class="${pos ? 'pos' : 'neg'}">$${c.netUsd ?? '—'}</b>
+        <span class="arb-fee">(fee ${Math.round((c.feeRate ?? 0) * 100)}% + envío $${c.shippingUsd ?? 0})</span>
+      </div>
+      <div class="row">
+        <a class="arb-link" href="${escapeAttr(s.ebaySearchUrl || '')}" target="_blank" rel="noopener">Abrir en eBay (bids/listing) ↗</a>
+        <button class="ghost details-btn" type="button" data-draft="${escapeAttr(s.key)}">Borrador listing</button>
+      </div>`;
+    res.appendChild(card);
+  }
+  if (!(data.selected || []).length) {
+    $('#arbNote').textContent = 'Ningún modelo alcanzó el mínimo de matches (' + (data.selected ? '' : 'revisá el log') + ') para comparar.';
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   init();
   $('#searchForm').addEventListener('submit', runSearch);
@@ -246,4 +325,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const id = btn.getAttribute('data-id');
     fetchDetail({ marketplace: mp, id });
   });
+
+  $('#goArb').addEventListener('click', runArbitrage);
 });
