@@ -401,6 +401,11 @@ Keep `.env` and `.fb-session/` private — they contain your live session. See
 the env vars and the pagination/gating behavior. Note this is unofficial
 scraping of Facebook's internal GraphQL; use at your own account risk.
 
+To get the **MCP** server (e.g. opencode) to use the same session, register it
+with `--env-file-if-exists=<repo>/.env` in its launch command — the live session
+then loads from `.env` without duplicating secrets. Full steps in
+[`docs/MCP.md`](./docs/MCP.md)
+
 ## Docker
 
 A multi-stage `Dockerfile` and `docker-compose.yml` are provided to run the REST

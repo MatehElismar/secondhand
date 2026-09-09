@@ -41,20 +41,43 @@ The server speaks MCP over stdio. Clients declare it as a local command.
 
 **Claude Code** (`~/.claude/.mcp.json`): same shape as above.
 
-**opencode** (`opencode.json`):
+**opencode** (`~/.config/opencode/opencode.jsonc`):
 
-```json
+```jsonc
 {
   "mcp": {
     "secondhand": {
       "type": "local",
-      "command": ["node", "/absolute/path/to/secondhand-mcp/dist/index.js"],
+      "command": [
+        "node",
+        "--env-file-if-exists=/abs/path/to/secondhand-mcp/.env",
+        "/abs/path/to/secondhand-mcp/dist/index.js"
+      ],
       "enabled": true,
       "environment": { "EBAY_MARKETPLACE_ID": "EBAY_US" }
     }
   }
 }
 ```
+
+### Replicating in opencode (fresh machine)
+
+Because loading `.env` keeps the secrets in the repo-ignored `.env` instead of
+duplicating them in the config, the whole setup is scriptable:
+
+1. Clone the repo, `npm install`, `npm run build`.
+2. **Log in once** to capture the Facebook session:
+   ```bash
+   npm run fb:session          # opens a Chrome window; writes FB_* into .env
+   ```
+   (Creates a persistent profile in `.fb-session/`, gitignored — no re-login.)
+3. Register the server in `~/.config/opencode/opencode.jsonc` with
+   `--env-file-if-exists=<repo>/.env` so the MCP process inherits the session.
+4. Restart opencode. `search_marketplace` with `limit > 24` now paginates.
+
+> Requires Node ≥ 22.9 for `--env-file-if-exists`. On older Node, either use
+> `--env-file=.env` (fails if missing) or pass `FB_COOKIE`/`FB_DTSG`/`FB_LSD`
+> directly in the `environment` block.
 
 ## Tools
 
