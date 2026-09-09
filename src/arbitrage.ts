@@ -13,6 +13,11 @@
  */
 
 import { getMarketplace } from './marketplaces/index.js';
+import { ACCESSORY_RE, modelKey, parseModel, sameModel } from './models.js';
+
+// Re-exported: callers imported these from here before the parser moved into
+// its own module.
+export { modelKey, parseModel, sameModel } from './models.js';
 
 const FX_DOP_PER_USD = 60; // heuristic; adjust to current rate
 // The SEARCHED marketplace (primary) is the SELL/target market; the OTHER
@@ -24,6 +29,8 @@ const SECONDS_IN_DAY = 24 * 60 * 60;
 export interface GroupStat {
   key: string;
   count: number;
+  /** How confidently the title named a specific product. See ParsedModel. */
+  confidence: 'high' | 'medium' | 'low';
   sample: number;
   avg: number | null;
   median: number | null;
@@ -73,46 +80,6 @@ export function dollar(n: number | null | undefined): number | null {
   return n == null ? null : Math.round(n);
 }
 
-export function modelKey(title: string): string {
-  const t = String(title || '').toLowerCase();
-  const cap = (w: string) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : '');
-  const storage = (): string => {
-    const m = t.match(/(\d+(?:\.\d+)?)\s?(gb|tb)/i);
-    return m ? ` ${m[1].toUpperCase()}${m[2].toUpperCase()}` : '';
-  };
-
-  if (/iphone/.test(t)) {
-    let k = 'iPhone';
-    const m = t.match(/iphone\s*(\d+)(?:\s*(pro|max|mini|plus|air|ultra))?/i);
-    if (m) k += ` ${m[1]}${m[2] ? ' ' + cap(m[2]) : ''}`;
-    return k + storage();
-  }
-  if (/ipad/.test(t)) {
-    let k = 'iPad';
-    const m = t.match(/(mini|air|pro)/i);
-    const gen = t.match(/(\d+)(?:st|nd|rd|th)?\s*(?:gen|generation)/i) || t.match(/generaci[oó]n\s*(\d+)/i) || t.match(/ipad\s*(\d+)/i);
-    if (m) k += ` ${cap(m[1])}`;
-    else if (gen) k += ` ${gen[1]}`;
-    return k + storage();
-  }
-  if (/apple watch|applewatch|iwatch|watch\s*(se|ultra|series)|series|serie/.test(t)) {
-    let k = 'Apple Watch';
-    const s = t.match(/series\s*(\d+)|serie\s*(\d+)| ultra| se\b/i);
-    if (s) k += ` ${s[2] ? `Serie ${s[2]}` : cap(s[0].trim())}`;
-    return k;
-  }
-  if (/macbook|mac book/.test(t)) {
-    const s = t.match(/(pro|air|m\d+)/i);
-    return 'MacBook' + (s ? ' ' + s[1].toUpperCase() : '') + storage();
-  }
-  if (/samsung|galaxy/.test(t)) {
-    const s = t.match(/galaxy\s*([\w\d]+)/i);
-    return 'Samsung' + (s ? ' ' + s[1] : '') + storage();
-  }
-  const fallback = String(title || '').replace(/[^a-z0-9 ]/gi, ' ').replace(/\s+/g, ' ').trim().split(' ').slice(0, 2).join(' ');
-  return fallback || 'Other';
-}
-
 function percentile(arr: number[], p: number): number | null {
   if (!arr.length) return null;
   const s = [...arr].sort((a, b) => a - b);
@@ -137,10 +104,14 @@ export function statsOf(prices: number[]): PriceStats {
 }
 
 export function groupStats(listings: any[]): GroupStat[] {
-  const groups = new Map<string, { key: string; count: number; prices: number[] }>();
+  const groups = new Map<string, { key: string; count: number; prices: number[]; confidence: GroupStat['confidence'] }>();
   for (const l of listings) {
-    const key = modelKey(l.title) || 'Other';
-    const g = groups.get(key) || { key, count: 0, prices: [] };
+    // Parts and accessories are not the product. Letting them form or join a
+    // group corrupts the sell-side median before any buy-side filter runs.
+    const parsed = parseModel(String(l.title || ''));
+    if (parsed.isAccessory) continue;
+    const key = parsed.key || 'Other';
+    const g = groups.get(key) || { key, count: 0, prices: [], confidence: parsed.confidence };
     g.count += 1;
     const u = toUsd(l.priceNumeric, l.currency);
     if (u != null && u > 0) g.prices.push(u);
@@ -149,17 +120,10 @@ export function groupStats(listings: any[]): GroupStat[] {
   return [...groups.values()].map((g) => ({
     key: g.key,
     count: g.count,
+    confidence: g.confidence,
     ...statsOf(g.prices),
   }));
 }
-
-/**
- * Titles that describe something other than the device itself. A keyword-only
- * rule is too blunt on its own ("iPhone 15 Pro 256GB, includes case" is a real
- * phone), so callers pair it with a price test — see filterBuyable.
- */
-const ACCESSORY_RE =
-  /\b(case|cover|funda|carcasa|skin|sticker|bumper|wallet|holster|screen protector|protector de pantalla|tempered glass|mica|charger|cargador|cable|adapter|adaptador|earpods|airpods|headphone|headset|auricular|lcd|oled|digitizer|back glass|housing|frame|flex|connector|motherboard|logic board|camera replacement|replacement (kit|part|screen|battery|display)|repair (kit|part)|repuesto|holder|mount|stand|tripod|lens protector|grip|strap|empty box|box only|caja vac|retail box|packaging|lot of \d+)/i;
 
 /**
  * Explicitly dead, damaged or carrier-locked units — never a "good" buy
@@ -181,19 +145,6 @@ const isAuctionOnly = (l: any) =>
   (Array.isArray(l?.buyingOptions) &&
     l.buyingOptions.includes('AUCTION') &&
     !l.buyingOptions.includes('FIXED_PRICE'));
-
-/**
- * Same device family and generation? Storage is ignored when either side does
- * not state it, but "15 Pro" never matches "15 Plus" or "13".
- *
- * eBay keyword search is loose: asking for "iPhone 15 Pro" returns iPhone 13
- * and 14 units. Costing a margin off those compares two different phones.
- */
-export function sameModel(a: string, b: string): boolean {
-  const norm = (k: string) => k.toLowerCase().replace(/\s*\d+(gb|tb)\b/g, '').replace(/\s+/g, ' ').trim();
-  const [x, y] = [norm(a), norm(b)];
-  return x === y;
-}
 
 /**
  * Drop listings that are not the product itself. eBay keyword search for
@@ -300,7 +251,13 @@ export async function runArbitrage(opts: ArbitrageOptions) {
     usd: statsOf(priced),
   };
 
-  const eligible = allModels.filter((s) => s.count >= minMatches);
+  // Only compare models the titles actually identified. A group like "Laptop
+  // Dell Latitude" holds three different machines, and querying the other
+  // market with that string returns a decade of unrelated stock — the margin
+  // that falls out is fiction wearing a precise number.
+  const identified = allModels.filter((s) => s.confidence === 'high');
+  const skippedVague = allModels.filter((s) => s.confidence !== 'high' && s.count >= minMatches);
+  const eligible = identified.filter((s) => s.count >= minMatches);
   const top = eligible.slice().sort((a, b) => b.count - a.count || (b.avg ?? 0) - (a.avg ?? 0)).slice(0, topN);
 
   const selected = [];
@@ -400,6 +357,12 @@ export async function runArbitrage(opts: ArbitrageOptions) {
     limit,
     totals,
     allModels,
+    /**
+     * Groups big enough to compare but too vaguely described to identify.
+     * Reported rather than silently dropped: "nothing qualified" and "your
+     * search was too generic to compare anything" are different answers.
+     */
+    skippedVague: skippedVague.map((s) => ({ key: s.key, count: s.count, confidence: s.confidence })),
     selected,
   };
 }

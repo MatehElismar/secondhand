@@ -514,6 +514,16 @@ function renderArbitrage(data) {
 
   const note = [];
   if (!t.success) note.push(`El mercado de origen devolvió error: ${t.error || 'desconocido'}`);
+  // "Nothing qualified" and "your search was too generic to compare" are
+  // different answers, and the second one is actionable.
+  const vague = data.skippedVague || [];
+  if (vague.length) {
+    const top = vague.slice(0, 3).map((v) => `${v.key} (${v.count})`).join(', ');
+    note.push(
+      `Sin comparar por títulos imprecisos: ${top}. ` +
+      'Los anuncios no dicen el modelo exacto, así que compararlos sería inventar un margen. Busca algo más específico.'
+    );
+  }
   const secErr = (data.selected || []).map((s) => s.secondary?.error).find(Boolean);
   if (secErr) note.push(`${data.secondaryMarket}: ${secErr}`);
   $('#arbNote').textContent = note.join(' · ');
@@ -529,9 +539,10 @@ function renderArbitrage(data) {
 
   const res = $('#arbRes');
   if (!all.length) {
-    res.innerHTML =
-      '<p class="empty">Ningún modelo alcanzó el mínimo de 3 apariciones para poder comparar.<br />Prueba una búsqueda más genérica o sube el límite.</p>' +
-      distributionHtml(t.distribution);
+    const vagueMsg = (data.skippedVague || []).length
+      ? 'Los títulos no identifican un modelo concreto (p. ej. «Laptop Lenovo»), así que no hay nada comparable.<br />Prueba una búsqueda más específica: marca y modelo.'
+      : 'Ningún modelo alcanzó el mínimo de 3 apariciones para poder comparar.<br />Prueba una búsqueda más amplia o sube el límite.';
+    res.innerHTML = `<p class="empty">${vagueMsg}</p>` + distributionHtml(t.distribution);
     return;
   }
 

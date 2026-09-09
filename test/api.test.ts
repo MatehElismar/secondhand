@@ -291,7 +291,7 @@ describe('POST /v1/arbitrage', () => {
     expect(body.secondaryMarket).toBe('ebay');
     expect(body.totals.listingsCount).toBe(9);
     // Only iPhone 15 (4) and iPad Air (3) qualify (iPad Pro has 2).
-    expect(body.selected.map((s: any) => s.key)).toEqual(['iPhone 15 128GB', 'iPad Air 64GB']);
+    expect(body.selected.map((s: any) => s.key)).toEqual(['iPhone 15 128GB', 'iPad Air 4 64GB']);
     // eBay is a stub that returns no listings → delta null, handled gracefully.
     expect(body.selected[0].secondary.error).toBeUndefined();
     expect(body.selected[0].comparison.deltaUsd).toBe(null);

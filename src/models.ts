@@ -1,0 +1,363 @@
+/**
+ * Product/model classification.
+ *
+ * Everything downstream leans on this: listings are grouped by model, the group
+ * key becomes the query sent to the other marketplace, and margins are only
+ * meaningful when both sides resolved to the same model. A sloppy key does not
+ * degrade gracefully — it prices one phone against another.
+ *
+ * Titles are written by sellers, in two languages, and routinely list several
+ * configurations at once ("128/256/512GB"). So parsing is structural: pull out
+ * what is actually asserted, and leave the rest null rather than guessing.
+ */
+
+export interface ParsedModel {
+  /** 'Apple', 'Samsung', … or null when unrecognized. */
+  brand: string | null;
+  /** Product line: 'iPhone', 'iPad', 'MacBook', 'Apple Watch', 'Galaxy'. */
+  line: string | null;
+  /** Generation/number within the line: '15', '4', '9', 'SE'. */
+  generation: string | null;
+  /** Trim: 'Pro Max', 'Pro', 'Plus', 'mini', 'Ultra', 'FE', 'Air'. */
+  variant: string | null;
+  /** Apple silicon, when named: 'M2', 'M4 Pro'. */
+  chip: string | null;
+  /** Storage in GB — never RAM, and null when the title lists several. */
+  storageGb: number | null;
+  /** The title advertises multiple configurations, so no single capacity. */
+  multiStorage: boolean;
+  /** Watch case size in mm. */
+  sizeMm: number | null;
+  /** Not a device: a case, a screen assembly, a lot, an empty box. */
+  isAccessory: boolean;
+  /** Canonical, human-readable key. */
+  key: string;
+  /**
+   * How much the key can be trusted as an identity.
+   *  high   - brand, line and a model identifier were all recognized.
+   *  medium - brand and line, but nothing pinning the specific model.
+   *  low    - the title never named a model ("Laptop Lenovo", "Laptop Gamer").
+   *
+   * Nothing downstream may price a margin off a 'low' key: two listings that
+   * share it are not the same product, they are merely described as vaguely.
+   */
+  confidence: 'high' | 'medium' | 'low';
+}
+
+/**
+ * Titles describing something other than the device itself. Grouping has to
+ * know about these too: an "OLED For iPhone 15 Pro Replacement" is not an
+ * iPhone 15 Pro, and letting it into the group corrupts that group's median
+ * before any buy-side filtering gets a chance to run.
+ */
+export const ACCESSORY_RE =
+  /\b(case|cover|funda|carcasa|skin|sticker|bumper|wallet|holster|screen protector|protector de pantalla|tempered glass|mica|charger|cargador|cable|adapter|adaptador|earpods|airpods|headphone|headset|auricular|lcd|oled|digitizer|back ?glass|backhousing|back housing|housing|frame|flex|connector|motherboard|logic board|camera replacement|replacement (kit|part|screen|battery|display|digitizer)|repair (kit|part)|repuesto|holder|mount|stand|tripod|lens protector|grip|strap|band only|empty box|box only|caja vac|retail box|packaging|lot of \d+)\b/i;
+
+/** "For iPhone 15" / "Compatible with iPhone 15" only ever precede accessories. */
+const FOR_PREFIX_RE = /^\s*(for|para|compatible (with|con)|fits)\b/i;
+
+const isAccessoryTitle = (t: string) => ACCESSORY_RE.test(t) || FOR_PREFIX_RE.test(t);
+
+/**
+ * Storage, in GB, ignoring RAM.
+ *
+ * "MacBook Air M2 8GB RAM 256GB SSD" must not classify as an 8GB machine —
+ * that single mistake split one MacBook model across four groups. And a title
+ * offering "128/256/512GB" has no single capacity, so it reports none rather
+ * than silently claiming the first.
+ */
+export function parseStorage(title: string): { storageGb: number | null; multiStorage: boolean } {
+  const t = title.toLowerCase();
+
+  // Capacities explicitly labelled as memory are not storage.
+  const ramValues = new Set<number>();
+  for (const m of t.matchAll(/(\d+)\s*gb\s*(?:de\s*)?ram|ram[:\s]*(\d+)\s*gb/gi)) {
+    ramValues.add(Number(m[1] ?? m[2]));
+  }
+
+  // "128/256/512GB" and "128GB 256GB 512GB" both mean "pick a configuration".
+  const slashRun = t.match(/(\d+\s*(?:\/\s*\d+\s*){1,}(?:gb|tb))/i);
+
+  const found: number[] = [];
+  for (const m of t.matchAll(/(\d+(?:\.\d+)?)\s*(gb|tb)\b/gi)) {
+    const value = Number(m[1]) * (m[2].toLowerCase() === 'tb' ? 1024 : 1);
+    const after = t.slice(m.index! + m[0].length, m.index! + m[0].length + 6);
+    if (/^\s*ram/.test(after)) continue;
+    found.push(value);
+  }
+  const storages = found.filter((v) => !ramValues.has(v) || found.filter((f) => f === v).length > 1);
+  const distinct = [...new Set(storages)];
+
+  if (slashRun || distinct.length >= 3) return { storageGb: null, multiStorage: true };
+  if (distinct.length === 0) return { storageGb: null, multiStorage: false };
+  if (distinct.length === 1) return { storageGb: distinct[0], multiStorage: false };
+
+  // Two capacities and no RAM label: the smaller one is almost always memory
+  // (8/16/24/32GB) next to a real disk. Otherwise it is a two-config listing.
+  const [small, large] = [Math.min(...distinct), Math.max(...distinct)];
+  if (small <= 32 && large >= 128) return { storageGb: large, multiStorage: false };
+  return { storageGb: null, multiStorage: true };
+}
+
+const titleCase = (w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+
+function parseChip(t: string): string | null {
+  const m = t.match(/\bm([1-9])\s*(pro|max|ultra)?\b/i);
+  if (!m) return null;
+  return `M${m[1]}${m[2] ? ' ' + titleCase(m[2]) : ''}`;
+}
+
+/** Parse a listing title into its structural parts. */
+export function parseModel(title: string): ParsedModel {
+  const raw = String(title || '');
+  const t = raw.toLowerCase();
+  const { storageGb, multiStorage } = parseStorage(raw);
+  const isAccessory = isAccessoryTitle(raw);
+
+  const base = {
+    brand: null as string | null,
+    line: null as string | null,
+    generation: null as string | null,
+    variant: null as string | null,
+    chip: null as string | null,
+    storageGb,
+    multiStorage,
+    sizeMm: null as number | null,
+    isAccessory,
+  };
+
+  // ── Apple Watch ────────────────────────────────────────────────────────
+  if (/\b(apple\s*watch|iwatch)\b/i.test(t) || /\bwatch\s*(series|ultra|se)\b/i.test(t)) {
+    const series = t.match(/serie?s?\s*(\d+)/i);
+    const ultra = /\bwatch\s*ultra\s*(\d)?/i.exec(t);
+    const se = /\bwatch\s*se\b|\bse\s*\(?(2nd|2)\b/i.test(t);
+    const mm = t.match(/(\d{2})\s*mm/);
+    const variant = ultra ? `Ultra${ultra[1] ? ' ' + ultra[1] : ''}` : se ? 'SE' : null;
+    return finish({
+      ...base,
+      brand: 'Apple',
+      line: 'Apple Watch',
+      generation: series ? series[1] : null,
+      variant,
+      sizeMm: mm ? Number(mm[1]) : null,
+      storageGb: null, // watch capacity is never the price driver
+      multiStorage: false,
+    });
+  }
+
+  // ── iPhone ─────────────────────────────────────────────────────────────
+  if (/\biphone\b/i.test(t)) {
+    // "Pro Max" must be tried before "Pro", or every Max collapses into Pro.
+    const m = t.match(/iphone\s*(se|xr|xs|x|\d{1,2})\s*(pro\s*max|pro|plus|\+|mini|max)?/i);
+    let generation = m ? m[1].toUpperCase() : null;
+    let variant: string | null = null;
+    if (m?.[2]) {
+      const v = m[2].toLowerCase().replace(/\s+/g, ' ');
+      variant = v === 'pro max' ? 'Pro Max' : v === '+' ? 'Plus' : titleCase(v);
+    }
+    if (generation === 'SE') {
+      const gen = t.match(/se\s*\(?(2nd|3rd|2|3)/i);
+      generation = gen ? `SE ${gen[1].replace(/nd|rd/, '')}` : 'SE';
+    }
+    return finish({ ...base, brand: 'Apple', line: 'iPhone', generation, variant });
+  }
+
+  // ── iPad ───────────────────────────────────────────────────────────────
+  if (/\bipad\b/i.test(t)) {
+    const variantMatch = t.match(/ipad\s*(pro|air|mini)/i);
+    const variant = variantMatch ? titleCase(variantMatch[1]) : null;
+    // "iPad Air 4", "iPad Air 4th Gen", "iPad 9th generation", "iPad Air M2".
+    const gen =
+      t.match(/ipad\s*(?:pro|air|mini)?\s*(\d{1,2})(?:st|nd|rd|th)?\s*(?:gen|generation)?\b/i) ||
+      t.match(/generaci[oó]n\s*(\d{1,2})/i);
+    const chip = parseChip(t);
+    const inches = t.match(/(\d{1,2}(?:\.\d)?)\s*(?:-)?\s*inch|(\d{1,2}(?:\.\d)?)"/i);
+    return finish({
+      ...base,
+      brand: 'Apple',
+      line: 'iPad',
+      variant,
+      // A chip names the model just as well as a generation number does.
+      generation: gen ? gen[1] : chip ? null : inches ? `${inches[1] ?? inches[2]}"` : null,
+      chip,
+    });
+  }
+
+  // ── MacBook ────────────────────────────────────────────────────────────
+  if (/\bmac\s?book\b/i.test(t)) {
+    const variantMatch = t.match(/mac\s?book\s*(air|pro)/i);
+    return finish({
+      ...base,
+      brand: 'Apple',
+      line: 'MacBook',
+      variant: variantMatch ? titleCase(variantMatch[1]) : null,
+      chip: parseChip(t),
+    });
+  }
+
+  // ── Samsung Galaxy ─────────────────────────────────────────────────────
+  if (/\b(samsung|galaxy)\b/i.test(t)) {
+    // S23 / S23+ / S23 Plus / S23 Ultra / S23 FE are different phones at very
+    // different prices; collapsing them into one "Samsung S23" was the single
+    // worst grouping error in practice.
+    const s = t.match(/\b(s|note|a|m)\s*(\d{1,3})\s*(ultra|plus|\+|fe)?/i);
+    const fold = t.match(/\b(z\s*fold|z\s*flip|fold|flip)\s*(\d)?/i);
+    let generation: string | null = null;
+    let variant: string | null = null;
+    if (fold) {
+      generation = fold[2] ?? null;
+      variant = /fold/i.test(fold[1]) ? 'Z Fold' : 'Z Flip';
+    } else if (s) {
+      generation = `${s[1].toUpperCase()}${s[2]}`;
+      if (s[3]) {
+        const v = s[3].toLowerCase();
+        variant = v === '+' ? 'Plus' : v === 'fe' ? 'FE' : titleCase(v);
+      }
+    }
+    return finish({ ...base, brand: 'Samsung', line: 'Galaxy', generation, variant });
+  }
+
+  // ── Windows laptops ────────────────────────────────────────────────────
+  const pc = parsePcLaptop(t);
+  if (pc) return finish({ ...base, ...pc });
+
+  // ── Unknown ────────────────────────────────────────────────────────────
+  // Two leading words was the old fallback and it grouped by noise ("Apple
+  // iPhone", "New Samsung"). Strip filler first so the words carry meaning.
+  const words = raw
+    .replace(/[^\p{L}\p{N} ]/gu, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((w) => !/^(new|nuevo|used|usado|oem|original|genuine|sealed|unlocked|factory|the|de|para|con)$/i.test(w));
+  return finish({
+    ...base,
+    generation: null,
+    key: words.slice(0, 3).map(titleCase).join(' ') || 'Other',
+    confidence: 'low',
+  } as never);
+}
+
+
+/** Brands and product lines that actually identify a Windows laptop. */
+const PC_BRANDS = ['dell', 'hp', 'lenovo', 'acer', 'asus', 'msi', 'toshiba', 'razer', 'samsung', 'microsoft', 'alienware', 'gateway', 'huawei', 'lg'];
+const PC_LINES = [
+  'latitude', 'inspiron', 'xps', 'vostro', 'precision', 'alienware',
+  'thinkpad', 'ideapad', 'yoga', 'legion', 'thinkbook',
+  'elitebook', 'probook', 'pavilion', 'envy', 'omen', 'spectre', 'victus', 'chromebook',
+  'aspire', 'predator', 'nitro', 'swift', 'travelmate',
+  'zenbook', 'vivobook', 'rog', 'tuf',
+  'surface laptop', 'surface pro', 'surface go', 'surface book',
+  'macbook',
+];
+
+/**
+ * A Windows laptop's identity is brand + line + model number. The number is
+ * the hard part: "Dell Latitude 5420" names a machine, "Dell Latitude 14"
+ * names a screen. Treating the screen size as a model split one machine into
+ * several groups and merged different ones.
+ */
+function parsePcLaptop(t: string): Partial<ParsedModel> | null {
+  const brand = PC_BRANDS.find((b) => new RegExp(`\\b${b}\\b`, 'i').test(t));
+  const line = PC_LINES.find((l) => new RegExp(`\\b${l}\\b`, 'i').test(t));
+  if (!brand && !line) return null;
+
+  const brandName = brand ? titleCase(brand) : null;
+  const lineName = line ? line.split(' ').map(titleCase).join(' ') : null;
+
+  // A model identifier follows the line name and is not a screen measurement.
+  let model: string | null = null;
+  if (line) {
+    const after = t.slice(t.toLowerCase().indexOf(line) + line.length);
+    const m = after.match(/^[\s-]*((?:[a-z]{1,2}\d{2,4}[a-z]{0,3})|(?:\d{3,4}[a-z]{0,3}))\b/i);
+    if (m) {
+      const token = m[1];
+      // 13/14/15/16/17 alone is a screen size, and "15.6" never a model.
+      const screenish = /^\d{2}$/.test(token) && Number(token) >= 10 && Number(token) <= 18;
+      if (!screenish) model = token.toUpperCase();
+    }
+  }
+
+  const parts = [brandName, lineName, model].filter(Boolean) as string[];
+  if (!parts.length) return null;
+  return {
+    brand: brandName,
+    line: lineName,
+    generation: model,
+    key: parts.join(' '),
+    confidence: model ? 'high' : lineName ? 'medium' : 'low',
+  } as Partial<ParsedModel>;
+}
+
+/** Assemble the canonical key from whatever the parse established. */
+function finish(p: Omit<ParsedModel, 'key' | 'confidence'> & { key?: string; confidence?: ParsedModel['confidence'] }): ParsedModel {
+  if (p.key) return { confidence: 'high', ...p, key: p.key } as ParsedModel;
+
+  const parts: string[] = [];
+  if (p.line) parts.push(p.line);
+  // Each line names itself in its own order: "iPhone 15 Pro Max", but
+  // "iPad Air 4" and "Galaxy S23 Ultra".
+  if (p.line === 'iPhone') {
+    if (p.generation) parts.push(p.generation);
+    if (p.variant) parts.push(p.variant);
+  } else if (p.line === 'Apple Watch') {
+    if (p.variant) parts.push(p.variant);
+    else if (p.generation) parts.push('Series', p.generation);
+  } else if (p.line === 'Galaxy') {
+    if (p.generation) parts.push(p.generation);
+    if (p.variant) parts.push(p.variant);
+  } else {
+    if (p.variant) parts.push(p.variant);
+    if (p.generation) parts.push(p.generation);
+  }
+  if (p.chip) parts.push(p.chip);
+  if (p.sizeMm) parts.push(`${p.sizeMm}mm`);
+  if (p.storageGb) parts.push(p.storageGb >= 1024 ? `${p.storageGb / 1024}TB` : `${p.storageGb}GB`);
+  const key = parts.join(' ').trim() || 'Other';
+  // A line with no generation, trim or chip is just a category name.
+  const identified = Boolean(p.generation || p.chip || p.variant);
+  const confidence: ParsedModel['confidence'] =
+    p.confidence ?? (!p.line ? 'low' : identified ? 'high' : 'medium');
+  return { ...p, key, confidence } as ParsedModel;
+}
+
+/** Canonical key for a title — the identity used for grouping and querying. */
+export function modelKey(title: string): string {
+  return parseModel(title).key;
+}
+
+/**
+ * The key minus the capacity — what to compare and what to search with. Two
+ * listings of the same phone in different capacities are the same model; a
+ * listing that never states capacity is not a third model.
+ */
+export function modelFamily(title: string): string {
+  const p = parseModel(title);
+  return finish({ ...p, storageGb: null, key: undefined }).key;
+}
+
+/**
+ * Do these two keys describe the same device? Capacity is a wildcard when
+ * either side leaves it out, but "15 Pro" never matches "15 Pro Max", "15
+ * Plus" or "13" — those cost hundreds of dollars apart.
+ */
+export function sameModel(a: string, b: string): boolean {
+  const strip = (k: string) =>
+    k
+      .toLowerCase()
+      .replace(/\s*\d+(?:\.\d+)?(gb|tb)\b/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const [x, y] = [strip(a), strip(b)];
+  if (x === y) return true;
+  // Capacity aside, one side may simply be less specific — but only trailing
+  // capacity is optional, never a trim level.
+  return false;
+}
+
+/**
+ * The query to send to the other marketplace. Capacity narrows results
+ * usefully, but a multi-configuration listing has none to offer.
+ */
+export function searchQueryFor(key: string): string {
+  return key.replace(/\s+/g, ' ').trim();
+}

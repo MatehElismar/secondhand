@@ -30,6 +30,7 @@ import {
   getAllMarketplaces,
 } from './marketplaces/index.js';
 import { runArbitrage } from './arbitrage.js';
+import { modelFamily, parseModel } from './models.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { SearchParams, ListingDetails, LocationCoordinates } from './types.js';
@@ -65,6 +66,11 @@ const listingProps: Record<string, unknown> = {
   bidCount: { type: 'number' },
   endsAt: { type: 'string' },
   auctionOnly: { type: 'boolean' },
+  // Canonical model, resolved server-side. The browser used to re-implement
+  // this and the two copies had already drifted apart.
+  model: { type: 'string' },
+  modelFamily: { type: 'string' },
+  isAccessory: { type: 'boolean' },
 };
 
 const resolvedLocationProps: Record<string, unknown> = {
@@ -445,7 +451,16 @@ export async function buildApiServer(): Promise<FastifyInstance> {
         search: searchMeta(marketplace, query, location, resolved, radiusMiles ?? radius, minPrice, maxPrice),
         success: result.success,
         marketplace: result.marketplace,
-        listings: result.listings,
+        // Classify once, server-side, so every consumer groups identically.
+        listings: (result.listings || []).map((l) => {
+          const parsed = parseModel(String(l.title || ''));
+          return {
+            ...l,
+            model: parsed.key,
+            modelFamily: modelFamily(String(l.title || '')),
+            ...(parsed.isAccessory ? { isAccessory: true } : {}),
+          };
+        }),
         ...(result.totalFound != null ? { totalFound: result.totalFound } : {}),
         ...(result.error ? { error: result.error } : {}),
         ...(result.note ? { note: result.note } : {}),
