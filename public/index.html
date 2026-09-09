@@ -58,6 +58,46 @@
         </div>
       </section>
 
+      <section class="card" id="arbitrage">
+        <div class="cardhead">
+          <h2>Arbitraje (cross-market)</h2>
+          <span id="arbTotals" class="pill"></span>
+        </div>
+        <div id="arbRes"><p class="empty">Haz una búsqueda para comparar mercados.</p></div>
+        <p id="arbNote" class="note"></p>
+        <details class="arb-legend">
+          <summary>Cómo leer esta tarjeta</summary>
+          <div class="arb-legend-body">
+            <dl>
+              <dt>Compras</dt>
+              <dd>Mediana de precio en el mercado secundario (<b>eBay</b>) — lo que te cuesta conseguir la unidad.</dd>
+              <dt>Vendes</dt>
+              <dd>Mediana en el mercado que buscaste (<b>Facebook</b>) — lo que la gente pide localmente.</dd>
+              <dt>Ganancia neta</dt>
+              <dd>Vendes − Compras − fee de venta (%) − envío ($). Si es <b>negativa</b>, comprar allá y vender acá pierde dinero.</dd>
+              <dt>Rango p25–p75</dt>
+              <dd>La barra cubre el 50% central de los precios; la línea blanca es la mediana. Si las dos barras se solapan mucho, el margen es frágil.</dd>
+              <dt>n</dt>
+              <dd>Cuántos listados sostienen la mediana. Con <b>n&lt;5</b> el dato es poco confiable.</dd>
+            </dl>
+            <p>Se agrupa por modelo y se comparan los modelos con ≥3 apariciones. Precios normalizados a USD (DOP→USD ÷60). Son precios <b>pedidos</b>, no ventas cerradas: trátalo como una señal, no como una garantía.</p>
+          </div>
+        </details>
+      </section>
+
+      <section class="card">
+        <div class="cardhead">
+          <h2>Resumen por modelo <span id="statsCount" class="pill"></span></h2>
+        </div>
+        <p class="note">Asking price por producto/modelo (promedio + mediana, más robusta). Moneda normalizada a DOP (USD→DOP @60).</p>
+        <table id="stats" class="stats" hidden>
+          <thead><tr><th>Modelo</th><th>Cant.</th><th>Promedio</th><th>Mediana</th><th>Mín</th><th>Máx</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p id="statsEmpty" class="empty" hidden>Sin listados con precio real para agrupar.</p>
+        <p id="statsPending" class="empty">Haz una búsqueda para ver el resumen.</p>
+      </section>
+
       <section class="card">
         <div class="cardhead">
           <h2>Resultados <span id="count" class="pill"></span></h2>
@@ -67,30 +107,9 @@
         <p id="empty" class="empty" hidden>Sin resultados para mostrar.</p>
       </section>
 
-      <section class="card">
-        <div class="cardhead">
-          <h2>Resumen por modelo <span id="statsCount" class="pill"></span></h2>
-        </div>
-        <p class="note">Asking price por producto/modelo (promedio + mediana, más robusta). Moneda normalizada a DOP (USD→DOP @60).</p>
-        <table id="stats" class="stats">
-          <thead><tr><th>Modelo</th><th>Cant.</th><th>Promedio</th><th>Mediana</th><th>Mín</th><th>Máx</th></tr></thead>
-          <tbody></tbody>
-        </table>
-        <p id="statsEmpty" class="empty" hidden>Sin listados con precio real para agrupar.</p>
-      </section>
-
       <section class="card hint" id="ebayHint" hidden>
         <h2>Comparar con eBay</h2>
         <p id="ebayMsg"></p>
-      </section>
-
-      <section class="card" id="arbitrage">
-        <div class="cardhead">
-          <h2>Arbitraje (cross-market)</h2>
-          <span id="arbTotals" class="pill"></span>
-        </div>
-        <div id="arbRes"></div>
-        <p id="arbNote" class="note"></p>
       </section>
     </main>
 

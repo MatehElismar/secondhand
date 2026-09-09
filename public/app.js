@@ -87,11 +87,24 @@ function computeStats(listings) {
     }))
     .sort((a, b) => (b.count - a.count) || ((b.avg ?? 0) - (a.avg ?? 0)));
 }
+/** Wipe the per-model summary while a new search is in flight. */
+function clearStats(message) {
+  document.querySelector('#stats tbody').innerHTML = '';
+  $('#statsCount').textContent = '';
+  $('#statsEmpty').hidden = true;
+  $('#stats').hidden = true;
+  const pending = $('#statsPending');
+  pending.textContent = message;
+  pending.hidden = false;
+}
+
 function renderStats(listings) {
   const stats = computeStats(listings);
   const tb = document.querySelector('#stats tbody');
   $('#statsCount').textContent = `${stats.length} modelo(s) · ${listings.length} listings`;
   tb.innerHTML = '';
+  $('#statsPending').hidden = true;
+  $('#stats').hidden = stats.length === 0;
   $('#statsEmpty').hidden = stats.length > 0;
   const fmt = (n) => (n == null ? '—' : '$' + Math.round(n).toLocaleString('en-US'));
   for (const s of stats) {
@@ -146,17 +159,25 @@ async function runSearch(e) {
   $('#empty').hidden = true;
   $('#listings').innerHTML = '<p class="empty">Buscando…</p>';
   $('#note').textContent = '';
+  // The old comparison belongs to the previous query — drop it now rather than
+  // leaving stale numbers on screen for the length of the primary search.
+  clearArbitrage('Esperando los resultados de la búsqueda…');
+  clearStats('Esperando los resultados de la búsqueda…');
   try {
     const res = await fetch('/v1/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await res.json();
     if (res.status >= 400) throw new Error(data.error || ('HTTP ' + res.status));
     lastData = data;
     render(data);
+    // Auto-trigger the cross-market arbitrage with the same search params.
+    runArbitrage();
   } catch (err) {
     $('#note').textContent = 'Error: ' + err.message;
     $('#listings').innerHTML = '';
     $('#count').textContent = '';
     $('#empty').hidden = false;
+    clearArbitrage('Sin comparación: la búsqueda falló.');
+    clearStats('Sin resumen: la búsqueda falló.');
   }
 }
 
@@ -231,7 +252,18 @@ function showEbayHint(msg) {
 }
 
 // --- Arbitrage (use case #1): cross-market comparison via /v1/arbitrage -------
+/** Wipe every trace of the previous comparison, including the cached data. */
+function clearArbitrage(message) {
+  lastArb = null;
+  $('#arbTotals').textContent = '';
+  $('#arbNote').textContent = '';
+  $('#arbRes').innerHTML = message ? `<p class="empty">${escape(message)}</p>` : '';
+}
+
+let arbRunId = 0;
+
 async function runArbitrage(e) {
+  const runId = ++arbRunId;
   const body = {
     marketplace: $('#marketplace').value,
     query: $('#query').value.trim(),
@@ -241,72 +273,279 @@ async function runArbitrage(e) {
     topN: 3, minMatches: 3,
   };
   const res = $('#arbRes');
-  res.innerHTML = '<p class="empty">Analizando… (búsqueda + comparación, puede tardar)</p>';
-  $('#arbNote').textContent = '';
+  clearArbitrage();
+  res.innerHTML =
+    '<div class="skel"><div class="skel-card"></div><div class="skel-card"></div><div class="skel-card"></div></div>' +
+    '<p class="empty">Analizando ambos mercados… puede tardar unos segundos.</p>';
   try {
     const r = await fetch('/v1/arbitrage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await r.json();
+    if (runId !== arbRunId) return; // a newer search already took over
     if (r.status >= 400) throw new Error(data.error || ('HTTP ' + r.status));
     renderArbitrage(data);
   } catch (err) {
+    if (runId !== arbRunId) return;
     $('#arbNote').textContent = 'Error: ' + err.message;
     res.innerHTML = '';
   }
 }
 
+// --- Arbitrage rendering ------------------------------------------------
+let lastArb = null;
+let onlyProfitable = false;
+
+const usd = (n) =>
+  n == null ? '—' : (n < 0 ? '−$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
+
+/** Net margin, or null when the buy side has no median to net against. */
+function effNet(s) {
+  if (s?.secondary?.usd?.median == null) return null;
+  return s.comparison?.netUsd ?? null;
+}
+
+/** Individual listings that turn a profit even when the median does not. */
+const unitWins = (s) => (s?.candidates || []).filter((c) => (c.netUsd ?? 0) > 0);
+
+/**
+ * Verdict from the net margin. A model whose median loses money can still hold
+ * specific underpriced units — that is a real opportunity, not a "no".
+ */
+function verdictOf(net, wins = 0) {
+  if (net == null) return wins ? { cls: 'v-partial', label: `${wins} unidad(es) con margen` } : { cls: 'v-unknown', label: 'Sin comparación' };
+  if (net > 0) return { cls: 'v-good', label: 'Conviene' };
+  if (wins) return { cls: 'v-partial', label: `Solo ${wins} unidad(es) puntual(es)` };
+  return { cls: 'v-bad', label: 'No conviene' };
+}
+
+/** Two price ranges on ONE shared scale, so the overlap is visible at a glance. */
+function rangesHtml(buy, sell) {
+  const vals = [];
+  for (const s of [buy, sell]) {
+    if (!s) continue;
+    for (const k of ['p25', 'median', 'p75']) if (typeof s[k] === 'number') vals.push(s[k]);
+  }
+  if (vals.length < 2) return '';
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  const pad = Math.max((hi - lo) * 0.15, hi * 0.05, 1);
+  lo = Math.max(0, lo - pad); hi = hi + pad;
+  const pct = (v) => ((v - lo) / (hi - lo)) * 100;
+
+  const row = (cls, label, s) => {
+    if (!s || s.median == null) return '';
+    const a = pct(s.p25 ?? s.median), b = pct(s.p75 ?? s.median);
+    const left = Math.min(a, b), width = Math.max(Math.abs(b - a), 1.5);
+    return `<div class="arb-range ${cls}">
+      <span class="arb-range-label">${escape(label)}</span>
+      <span class="arb-range-track">
+        <span class="arb-range-band" style="left:${left.toFixed(1)}%;width:${width.toFixed(1)}%"></span>
+        <span class="arb-range-med" style="left:${pct(s.median).toFixed(1)}%"></span>
+      </span>
+      <span class="arb-range-val">${usd(s.median)}</span>
+    </div>`;
+  };
+  return `<div class="arb-ranges">
+    <div class="arb-ranges-head">Rango de precios · p25–p75, línea = mediana</div>
+    ${row('buy', 'Compra', buy)}
+    ${row('sell', 'Venta', sell)}
+    <div class="arb-range-scale"><span>${usd(lo)}</span><span>${usd(hi)}</span></div>
+  </div>`;
+}
+
+function modelCardHtml(s, data) {
+  const p = s.primary || {};
+  const sec = s.secondary || {};
+  const secUsd = sec.usd || null;
+  const c = s.comparison || {};
+
+  const sell = p.median ?? null;
+  const buy = secUsd?.median ?? null;
+  const fee = sell != null ? sell * (c.feeRate ?? 0) : null;
+  const ship = c.shippingUsd ?? 0;
+
+  const lowSample = (p.count ?? 0) < 5;
+  const noSecondary = buy == null;
+  const net = effNet(s);
+  const wins = unitWins(s);
+  const bestUnit = wins.length ? wins[0].netUsd : null;
+  const v = verdictOf(net, wins.length);
+
+  const buyLeg = noSecondary
+    ? `<div class="arb-leg buy empty">
+         <span class="arb-leg-label">Compras en ${escape(data.secondaryMarket)}</span>
+         <span class="arb-leg-price">Sin datos</span>
+         <span class="arb-leg-sub">${escape(sec.error || 'ningún listado con precio')}</span>
+       </div>`
+    : `<div class="arb-leg buy">
+         <span class="arb-leg-label">Compras en ${escape(data.secondaryMarket)}</span>
+         <span class="arb-leg-price">${usd(buy)}</span>
+         <span class="arb-leg-sub">mediana · n=${secUsd.sample ?? sec.count ?? 0}</span>
+       </div>`;
+
+  const math = noSecondary
+    ? ''
+    : `<div class="arb-math">
+         <span class="term">${usd(sell)} <small>venta</small></span>
+         <span class="op">−</span>
+         <span class="term">${usd(buy)} <small>compra</small></span>
+         <span class="op">−</span>
+         <span class="term">${usd(fee)} <small>fee ${Math.round((c.feeRate ?? 0) * 100)}%</small></span>
+         <span class="op">−</span>
+         <span class="term">${usd(ship)} <small>envío</small></span>
+         <span class="op">=</span>
+         <span class="res">${usd(net)}</span>
+       </div>`;
+
+  return `<article class="arb-card ${v.cls}">
+    <div class="arb-card-head">
+      <div>
+        <h3 class="arb-title">${escape(s.key)}</h3>
+        <div class="arb-chips">
+          <span class="chip">${p.count ?? 0} en ${escape(data.primaryMarket)}</span>
+          <span class="chip">${sec.count ?? 0} en ${escape(data.secondaryMarket)}</span>
+          ${lowSample ? '<span class="chip warn">muestra baja</span>' : ''}
+        </div>
+      </div>
+      <div class="arb-verdict-wrap">
+        <div class="arb-net">${net == null ? '—' : (net > 0 ? '+' : '') + usd(net)}</div>
+        <div class="arb-verdict">${v.label}</div>
+        ${net != null && net <= 0 && bestUnit != null ? `<div class="arb-best-unit">mejor unidad +${usd(bestUnit)}</div>` : ''}
+      </div>
+    </div>
+    <div class="arb-flow">
+      ${buyLeg}
+      <div class="arb-arrow">→</div>
+      <div class="arb-leg sell">
+        <span class="arb-leg-label">Vendes en ${escape(data.primaryMarket)}</span>
+        <span class="arb-leg-price">${usd(sell)}</span>
+        <span class="arb-leg-sub">mediana · n=${p.sample ?? p.count ?? 0}</span>
+      </div>
+    </div>
+    ${math}
+    ${rangesHtml(secUsd, p)}
+    ${candidatesHtml(s, data)}
+    <div class="arb-actions">
+      ${s.otherMarketUrl ? `<a class="arb-link muted" href="${escapeAttr(s.otherMarketUrl)}" target="_blank" rel="noopener">Ver todas las ofertas en ${escape(data.secondaryMarket)} ↗</a>` : ''}
+      <button class="ghost details-btn" type="button" data-draft="${escapeAttr(s.key)}">Borrador listing</button>
+      ${sec.excluded ? `<span class="arb-hint">${sec.excluded} resultado(s) descartados: accesorios, repuestos o lotes.</span>` : ''}
+    </div>
+  </article>`;
+}
+
+/**
+ * Concrete units to buy, each with its own margin — the point of the whole
+ * screen. Only real devices reach here; the API already strips accessories,
+ * parts and lots from the buy side.
+ */
+function candidatesHtml(s, data) {
+  const list = (s.candidates || []).filter((c) => c.url);
+  if (!list.length) return '';
+  const profitable = list.filter((c) => (c.netUsd ?? 0) > 0);
+  const show = (profitable.length ? profitable : list).slice(0, 5);
+
+  return `<div class="arb-buys">
+    <div class="arb-buys-head">
+      ${profitable.length
+        ? `Comprar ahora en ${escape(data.secondaryMarket)} · ${profitable.length} con margen`
+        : `Unidades reales en ${escape(data.secondaryMarket)} · ninguna deja margen`}
+    </div>
+    ${show.map((c) => {
+      const good = (c.netUsd ?? 0) > 0;
+      return `<a class="arb-buy ${good ? 'good' : ''}" href="${escapeAttr(c.url)}" target="_blank" rel="noopener">
+        ${c.image ? `<img class="arb-buy-img" loading="lazy" src="${escapeAttr(c.image)}" alt="" onerror="this.style.visibility='hidden'" />` : '<span class="arb-buy-img"></span>'}
+        <span class="arb-buy-main">
+          <span class="arb-buy-title">${escape(c.title)}</span>
+          <span class="arb-buy-meta">${escape(c.condition || 'condición no informada')}${c.seller ? ' · ' + escape(c.seller) : ''}</span>
+        </span>
+        <span class="arb-buy-nums">
+          <span class="arb-buy-price">${usd(c.priceUsd)}</span>
+          <span class="arb-buy-net ${good ? 'pos' : 'neg'}">${c.netUsd == null ? '—' : (good ? '+' : '') + usd(c.netUsd)}</span>
+        </span>
+      </a>`;
+    }).join('')}
+    <div class="arb-buys-foot">Precio de compra y margen por unidad ya con fee y envío. Verifica condición, bloqueo y envío antes de comprar.</div>
+  </div>`;
+}
+
+function distributionHtml(dist) {
+  if (!dist || !dist.length) return '';
+  const maxC = Math.max(...dist.map((b) => b.count)) || 1;
+  // The backend folds prices above p95 into a trailing open-ended bucket.
+  const width = dist[0].to - dist[0].from;
+  const isOverflow = (b, i) => i === dist.length - 1 && b.to - b.from > width * 1.5;
+  return `<div class="arb-dist">
+    <div class="arb-dist-head">Distribución de precios en el mercado de venta (USD)</div>
+    ${dist.map((b, i) => `<div class="arb-barline">
+        <span class="arb-label">${isOverflow(b, i) ? usd(b.from) + '+' : usd(b.from) + '–' + usd(b.to)}</span>
+        <span class="arb-bar-track"><span class="arb-bar-fill" style="width:${((b.count / maxC) * 100).toFixed(1)}%"></span></span>
+        <span class="arb-n">${b.count}</span>
+      </div>`).join('')}
+  </div>`;
+}
+
 function renderArbitrage(data) {
+  if (data) lastArb = data;
+  data = lastArb;
+  if (!data) return;
+
   const t = data.totals || {};
-  $('#arbTotals').textContent = `${t.listingsCount ?? 0} listings · ${t.modelCount ?? 0} modelos · mediana USD$${t.usd?.median ?? '—'}`;
-  $('#arbNote').textContent = 'Precios normalizados a USD (DOP→USD ÷60). Margen estimado (net) = eBay mediana − fees(13%) − envío($10) − FB mediana. Solo lectura: el link abre eBay para que tú pujes/veas.';
+  $('#arbTotals').textContent =
+    `${t.listingsCount ?? 0} listings · ${t.modelCount ?? 0} modelos · mediana ${usd(t.usd?.median)}`;
+
+  const note = [];
+  if (!t.success) note.push(`El mercado de origen devolvió error: ${t.error || 'desconocido'}`);
+  const secErr = (data.selected || []).map((s) => s.secondary?.error).find(Boolean);
+  if (secErr) note.push(`${data.secondaryMarket}: ${secErr}`);
+  $('#arbNote').textContent = note.join(' · ');
+
+  // Rank by the best buy actually available, falling back to the median margin:
+  // a model whose typical unit loses money can still hold an underpriced one.
+  const bestUnitOf = (s) => unitWins(s)[0]?.netUsd ?? null;
+  const rank = (s) => bestUnitOf(s) ?? effNet(s) ?? -Infinity;
+  const all = (data.selected || []).slice().sort((a, b) => rank(b) - rank(a));
+  const buyCount = all.reduce((n, s) => n + unitWins(s).length, 0);
+  const bestUnit = all.map(bestUnitOf).filter((n) => n != null).sort((a, b) => b - a)[0] ?? null;
+  const shown = onlyProfitable ? all.filter((s) => unitWins(s).length > 0) : all;
 
   const res = $('#arbRes');
-  res.innerHTML = '';
-
-  // Distribution
-  const dist = t.distribution || [];
-  if (dist.length) {
-    const maxC = Math.max(...dist.map((b) => b.count));
-    const d = document.createElement('div');
-    d.className = 'arb-dist';
-    d.innerHTML = '<div class="arb-head">Distribución (USD)</div>' + dist.map((b) =>
-      `<div class="arb-barline"><span class="arb-label">$${b.from}–$${b.to}</span><span class="arb-bar">${'▇'.repeat(Math.round((b.count / (maxC || 1)) * 20))}</span><span class="arb-n">${b.count}</span></div>`
-    ).join('');
-    res.appendChild(d);
+  if (!all.length) {
+    res.innerHTML =
+      '<p class="empty">Ningún modelo alcanzó el mínimo de 3 apariciones para poder comparar.<br />Prueba una búsqueda más genérica o sube el límite.</p>' +
+      distributionHtml(t.distribution);
+    return;
   }
 
-  // Selected models side-by-side
-  for (const s of data.selected || []) {
-    const p = s.primary; const sec = s.secondary || {};
-    const em = (sec.usd || {}).median;
-    const c = s.comparison || {};
-    const pos = (c.netUsd ?? 0) > 0;
-    const card = document.createElement('div');
-    card.className = 'arb-model';
-    card.innerHTML = `
-      <div class="arb-model-title">${escape(s.key)} <span class="pill">${p.count ?? 0} en ${escape(data.primaryMarket)}</span></div>
-      <div class="arb-cols">
-        <div class="arb-col">
-          <div class="arb-col-title">${escape(data.primaryMarket)} (origen)</div>
-          <div>n=${p.count ?? 0} · mediana <b>$${p.median ?? '—'}</b></div>
-        </div>
-        <div class="arb-col">
-          <div class="arb-col-title">${escape(data.secondaryMarket)} (comparación)</div>
-          <div>n=${sec.count ?? 0} · mediana <b>$${em ?? '—'}</b> ${(sec.error ? '· <em>' + escape(sec.error) + '</em>' : '')}</div>
-        </div>
+  res.innerHTML = `
+    <div class="arb-hero">
+      <div class="arb-score">
+        <span class="arb-score-num ${buyCount ? 'pos' : 'neg'}">${buyCount}</span>
+        <span class="arb-score-label">unidad(es) concretas<br />con margen en <b>${all.length}</b> modelos</span>
       </div>
-      <div class="arb-comparison">
-        Delta <b>$${c.deltaUsd ?? '—'}</b> · Ganancia neta est. <b class="${pos ? 'pos' : 'neg'}">$${c.netUsd ?? '—'}</b>
-        <span class="arb-fee">(fee ${Math.round((c.feeRate ?? 0) * 100)}% + envío $${c.shippingUsd ?? 0})</span>
+      <div class="arb-hero-sep"></div>
+      <div class="arb-hero-stat">
+        <span class="k">Mejor unidad</span>
+        <span class="v ${bestUnit != null && bestUnit > 0 ? 'pos' : ''}">${bestUnit == null ? '—' : (bestUnit > 0 ? '+' : '') + usd(bestUnit)}</span>
       </div>
-      <div class="row">
-        <a class="arb-link" href="${escapeAttr(s.ebaySearchUrl || '')}" target="_blank" rel="noopener">Abrir en eBay (bids/listing) ↗</a>
-        <button class="ghost details-btn" type="button" data-draft="${escapeAttr(s.key)}">Borrador listing</button>
-      </div>`;
-    res.appendChild(card);
-  }
-  if (!(data.selected || []).length) {
-    $('#arbNote').textContent = 'Ningún modelo alcanzó el mínimo de matches (' + (data.selected ? '' : 'revisá el log') + ') para comparar.';
-  }
+      <div class="arb-hero-stat">
+        <span class="k">Compras en</span>
+        <span class="v">${escape(data.secondaryMarket)}</span>
+      </div>
+      <div class="arb-hero-stat">
+        <span class="k">Vendes en</span>
+        <span class="v">${escape(data.primaryMarket)}</span>
+      </div>
+      <label class="toggle arb-filter">
+        <input type="checkbox" id="onlyProfitable" ${onlyProfitable ? 'checked' : ''} /> Solo con margen
+      </label>
+    </div>
+    <div class="arb-list">
+      ${shown.length
+        ? shown.map((s) => modelCardHtml(s, data)).join('')
+        : '<p class="empty">Ninguna unidad concreta deja margen con estos parámetros.</p>'}
+    </div>
+    ${distributionHtml(t.distribution)}`;
+
+  const chk = document.getElementById('onlyProfitable');
+  if (chk) chk.addEventListener('change', (ev) => { onlyProfitable = ev.target.checked; renderArbitrage(); });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
