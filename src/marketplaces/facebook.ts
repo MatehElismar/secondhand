@@ -373,11 +373,17 @@ export class FacebookMarketplace extends BaseMarketplace {
     while (listings.length < limit && hasNextPage && endCursor && pages < maxPages) {
       pages++;
       const remaining = limit - listings.length;
-      const response = await this.fetchGraphQL(
-        SEARCH_PAGE_DOC_ID,
-        this.paginationVariables(query, coords, remaining, minPrice, maxPrice, radiusMiles, endCursor)
-      );
-      const next = this.readFeedUnits(response.data?.marketplace_search?.feed_units, remaining, showSold);
+      let next: FeedUnitsReading;
+      try {
+        const response = await this.fetchGraphQL(
+          SEARCH_PAGE_DOC_ID,
+          this.paginationVariables(query, coords, remaining, minPrice, maxPrice, radiusMiles, endCursor)
+        );
+        next = this.readFeedUnits(response.data?.marketplace_search?.feed_units, remaining, showSold);
+      } catch {
+        // A gated/error next page should not nuke the results already gathered.
+        break;
+      }
       for (const l of next.listings) {
         if (seen.has(l.id)) continue;
         seen.add(l.id);
@@ -736,9 +742,10 @@ export class FacebookMarketplace extends BaseMarketplace {
       });
     }
 
-    const json = (await response.json()) as any;
+    const text = await response.text();
+    const json = parseGraphQLResponse(text);
 
-    if (json.errors?.length) {
+    if (json?.errors?.length) {
       throw Object.assign(new Error(`Facebook GraphQL error: ${json.errors[0].message}`), {
         fatal: true,
       });
@@ -746,6 +753,46 @@ export class FacebookMarketplace extends BaseMarketplace {
 
     return json;
   }
+}
+
+/**
+ * Facebook sometimes serves a GraphQL reply as text/html (or as a JSON object
+ * with trailing content / an HTML wrapper). Parse a JSON object prefix when the
+ * body begins with '{'; otherwise it is an HTML error/login page, which is a
+ * soft (retryable) failure so callers can fall back or stop paginating.
+ */
+function parseGraphQLResponse(text: string): any {
+  const trimmed = text.trimStart();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    if (trimmed.startsWith('{')) {
+      const obj = extractJsonObject(trimmed);
+      if (obj) return JSON.parse(obj);
+    }
+  }
+  throw Object.assign(new Error('Facebook GraphQL returned a non-JSON response'), { fatal: false });
+}
+
+// Balanced-brace scan (string-aware) from the first '{' to its matching '}'.
+function extractJsonObject(text: string): string | null {
+  let depth = 0;
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (c === '\\') i++;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') inString = true;
+    else if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return text.slice(0, i + 1);
+    }
+  }
+  return null;
 }
 
 function clampRadius(radiusMiles: number | undefined): number {

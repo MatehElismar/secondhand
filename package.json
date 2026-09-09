@@ -19,6 +19,7 @@
     "dev": "ts-node src/index.ts",
     "preapi": "npm run build",
     "api": "node --env-file-if-exists=.env dist/api.js",
+    "fb:session": "node scripts/fb-session.mjs",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
