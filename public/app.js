@@ -26,49 +26,19 @@ const median = (arr) => {
   const m = Math.floor(s.length / 2);
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
-const _storage = (t) => {
-  const m = t.match(/(\d+(?:\.\d+)?)\s?(gb|tb)/i);
-  return m ? ` ${m[1].toUpperCase()}${m[2].toUpperCase()}` : '';
-};
-function modelKey(title) {
-  const t = String(title || '').toLowerCase();
-  const cap = (w) => w ? w.charAt(0).toUpperCase() + w.slice(1) : '';
-  if (/iphone/.test(t)) {
-    let k = 'iPhone';
-    const m = t.match(/iphone\s*(\d+)(?:\s*(pro|max|mini|plus|air|ultra))?/i);
-    if (m) k += ` ${m[1]}${m[2] ? ' ' + cap(m[2]) : ''}`;
-    if (/ultra/.test(t)) k += ' Ultra';
-    return k + _storage(t);
-  }
-  if (/ipad/.test(t)) {
-    let k = 'iPad';
-    const m = t.match(/(mini|air|pro)/i);
-    const gen = t.match(/(\d+)(?:st|nd|rd|th)?\s*(?:gen|generation)/i) || t.match(/generaci[oó]n\s*(\d+)/i) || t.match(/ipad\s*(\d+)/i);
-    if (m) k += ` ${cap(m[1])}`;
-    else if (gen) k += ` ${gen[1]}`;
-    return k + _storage(t);
-  }
-  if (/apple watch|applewatch|iwatch|watch\s*(se|ultra|series)|series|serie/.test(t)) {
-    let k = 'Apple Watch';
-    const s = t.match(/series\s*(\d+)|serie\s*(\d+)| ultra| se\b/i);
-    if (s) k += ` ${s[2] ? cap('Serie') + ' ' + s[2] : cap(s[0].trim())}`;
-    return k;
-  }
-  if (/macbook|mac book/.test(t)) {
-    const s = t.match(/(pro|air|m\d+)/i);
-    return 'MacBook' + (s ? ' ' + s[1].toUpperCase() : '') + _storage(t);
-  }
-  if (/samsung|galaxy/.test(t)) {
-    const s = t.match(/galaxy\s*([\w\d]+)/i);
-    return 'Samsung' + (s ? ' ' + s[1] : '') + _storage(t);
-  }
-  const fallback = String(title || '').replace(/[^a-z0-9 ]/gi, ' ').replace(/\s+/g, ' ').trim().split(' ').slice(0, 2).join(' ');
-  return fallback || 'Otro';
-}
+// Models are classified server-side (src/models.ts) and arrive on each listing
+// as `model`. The browser used to re-implement that parser; the two copies had
+// already drifted, so this table and the arbitrage disagreed on what a model
+// even was — the same MacBook showed as "MacBook AIR 8GB" here and
+// "MacBook Air M2 256GB" there.
+const modelOf = (l) => l.model || 'Otro';
+
 function computeStats(listings) {
   const groups = new Map();
   for (const l of listings) {
-    const key = modelKey(l.title) || 'Otro';
+    // Parts and accessories are not the product; they inflated these groups.
+    if (l.isAccessory) continue;
+    const key = modelOf(l);
     const g = groups.get(key) || { key, count: 0, priced: [], sum: 0 };
     g.count += 1;
     const dop = toDOP(l);
