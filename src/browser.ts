@@ -55,9 +55,15 @@ export async function getBrowser(): Promise<Browser> {
     );
   }
 
+  // Optional: reuse a persisted, logged-in browser profile (e.g. the one created
+  // by `npm run fb:session`, which signs into Facebook). Lets browser-scraped
+  // tasks (Facebook seller interaction, etc.) run authenticated.
+  const userDataDir = process.env.PUPPETEER_USER_DATA_DIR || undefined;
+
   browser = await (puppeteer as any).launch({
     headless: true,
     executablePath,
+    ...(userDataDir ? { userDataDir } : {}),
     protocolTimeout: 60000,
     args: [
       '--no-sandbox',

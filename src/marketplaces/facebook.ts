@@ -41,7 +41,8 @@ const API_PAGE_SIZE = 24;
 const MIN_TRUSTED_LISTINGS = 5;
 // Facebook serves search results in 24-item pages; the client fetches the next
 // page through a second, cursor-based operation (SEARCH_PAGE_DOC_ID).
-const MAX_PAGINATION_PAGES = 5;
+// 10 pages ≈ up to ~240 items; higher cost (more requests, faster rate-limit).
+const MAX_PAGINATION_PAGES = 10;
 
 const GRAPHQL_HEADERS: Record<string, string> = {
   'content-type': 'application/x-www-form-urlencoded',

@@ -18,14 +18,19 @@
  * document at /docs/json.
  */
 
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import fastify, { FastifyInstance } from 'fastify';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
+import fastifyStatic from '@fastify/static';
 import {
   initializeMarketplaces,
   getMarketplace,
   getAllMarketplaces,
 } from './marketplaces/index.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { SearchParams, ListingDetails, LocationCoordinates } from './types.js';
 
 const DEFAULT_PORT = 3000;
@@ -112,6 +117,12 @@ export async function buildApiServer(): Promise<FastifyInstance> {
         { name: 'listings', description: 'Fetch full details for one listing' },
       ],
     },
+  });
+
+  // Serve the web UI (use-case tooling) from /public at the site root.
+  await app.register(fastifyStatic, {
+    root: path.join(__dirname, '..', 'public'),
+    prefix: '/',
   });
 
   await app.register(swaggerUi, {

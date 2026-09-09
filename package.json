@@ -20,6 +20,7 @@
     "preapi": "npm run build",
     "api": "node --env-file-if-exists=.env dist/api.js",
     "fb:session": "node scripts/fb-session.mjs",
+    "fb:interact": "node scripts/seller-interact.mjs",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -44,6 +45,7 @@
   "author": "Justin Sookikian",
   "license": "MIT",
   "dependencies": {
+    "@fastify/static": "^10.1.3",
     "@fastify/swagger": "^9.8.1",
     "@fastify/swagger-ui": "^6.1.1",
     "@modelcontextprotocol/sdk": "~1.5.0",

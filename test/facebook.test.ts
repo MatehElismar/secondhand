@@ -434,9 +434,10 @@ describe('search pagination', () => {
 
     // Every page returns 5 fresh listings and never says there are no more.
     const result = await new FacebookMarketplace().search({ ...BASE, limit: 500 });
-    // First page + up to MAX_PAGINATION_PAGES - 1 more pages, then it stops.
-    expect(calls.length).toBe(5);
-    expect(result.listings).toHaveLength(25);
+    // First page + up to MAX_PAGINATION_PAGES - 1 more pages, then it stops
+    // (MAX_PAGINATION_PAGES = 10 → 10 calls, 50 listings).
+    expect(calls.length).toBe(10);
+    expect(result.listings).toHaveLength(50);
   });
 });
 

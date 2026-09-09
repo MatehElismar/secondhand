@@ -45,7 +45,7 @@ feed and paginate past 24, provide a logged-in session:
 | `FB_USER` / `FB_JAZOEST` | `__user` / `jazoest` (optional) |
 
 Keep these local/secret (`.env` is gitignored). With a session, a keyword search
-paginates via Facebook's cursor API up to a bounded number of pages (~120).
+paginates via Facebook's cursor API up to a bounded number of pages (~240).
 
 **Capture them with one login:** run `npm run fb:session` — it opens a dedicated
 Chrome window, you log in once, and it writes the `FB_*` values into `.env`
@@ -267,7 +267,7 @@ marketplace has no listing-details support.
   marketplace in that currency, not in USD.
 - **Facebook result cap**: a single keyword search is paginated in 24-item pages
   via Facebook's cursor-based `SearchContentPaginationQuery`, up to a bounded
-  number of pages (~120 listings). If Facebook returns its *gated* response (0
+  number of pages (~240 listings). If Facebook returns its *gated* response (0
   items but "has next page"), the adapter falls back to reading the server-side
   search page (single page, ~24 items) — this is the normal behavior when the IP
   is rate-limited; a residential proxy (`SMARTPROXY_URL`) reduces it.
