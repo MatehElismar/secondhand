@@ -15,12 +15,12 @@ function hasRealPrice(l) {
 let lastData = null;
 
 // --- Product/model categorization + average asking price (across all found) ---
-const FX_DOP_PER_USD = 60; // heuristic; adjust to current rate
-const toDOP = (l) => {
-  if (typeof l.priceNumeric !== 'number') return null;
-  const c = String(l.currency || '').toUpperCase();
-  return c === 'USD' || c === '$' ? l.priceNumeric * FX_DOP_PER_USD : l.priceNumeric;
-};
+// FX conversion lives in public/fx.js, loaded before this file. This file used
+// to carry its own copy of the rate, and the two copies disagreed about what
+// "$" meant: the server fed a peso price to its medians as dollars while this
+// file multiplied a dollar price by 60. test/arbitrage-conversion.test.ts drives
+// public/fx.js and src/arbitrage.ts from one table, so conversion is not
+// re-implemented here — the same reason the model parser is not.
 const median = (arr) => {
   const s = [...arr].sort((a, b) => a - b);
   const m = Math.floor(s.length / 2);
@@ -44,7 +44,7 @@ function computeStats(listings) {
     const key = modelOf(l);
     const g = groups.get(key) || { key, count: 0, priced: [], sum: 0 };
     g.count += 1;
-    const dop = toDOP(l);
+    const dop = SecondhandFX.toDOP(l);
     if (dop != null && dop > 1) { g.priced.push(dop); g.sum += dop; }
     groups.set(key, g);
   }
