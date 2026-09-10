@@ -31,6 +31,7 @@ import {
 } from './marketplaces/index.js';
 import { runArbitrage } from './arbitrage.js';
 import { isAccessoryListing, modelFamily, parseModel } from './models.js';
+import { clusterKeys } from './fuzzy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { SearchParams, ListingDetails, LocationCoordinates } from './types.js';
@@ -72,6 +73,10 @@ const listingProps: Record<string, unknown> = {
   // this and the two copies had already drifted apart.
   model: { type: 'string' },
   modelFamily: { type: 'string' },
+  // The grouping key for the per-model summary: identical to `model` except
+  // that low-confidence keys are fuzzy-merged with their near-twins, so the
+  // browser renders one row per vague product instead of one per phrasing.
+  modelGroup: { type: 'string' },
   isAccessory: { type: 'boolean' },
 };
 
@@ -454,15 +459,31 @@ export async function buildApiServer(): Promise<FastifyInstance> {
         success: result.success,
         marketplace: result.marketplace,
         // Classify once, server-side, so every consumer groups identically.
-        listings: (result.listings || []).map((l) => {
-          const parsed = parseModel(String(l.title || ''));
-          return {
+        listings: (() => {
+          // Classify once, server-side, so every consumer groups identically.
+          // The fuzzy group key has to be computed across the whole set:
+          // merging only makes sense relative to a key's neighbours.
+          const mapped = (result.listings || []).map((l) => {
+            const parsed = parseModel(String(l.title || ''));
+            return { l, parsed };
+          });
+          // Only low-confidence keys may cluster: "Laptop Lenovo" vs
+          // "Lenovo Laptop" are the same vague bucket, but "iPhone 15
+          // Pro" vs "iPhone 15 Pro Max" are different machines and stay
+          // put. Pass the key once per listing so the canonical key is
+          // the phrasing describing the most listings.
+          const canonical = clusterKeys(
+            mapped.filter(({ parsed }) => parsed.confidence === 'low').map(({ parsed }) => parsed.key),
+          );
+          return mapped.map(({ l, parsed }) => ({
             ...l,
             model: parsed.key,
             modelFamily: modelFamily(String(l.title || '')),
+            // high/medium keys are their own group; only low keys remap.
+            modelGroup: parsed.confidence === 'low' ? canonical.get(parsed.key) ?? parsed.key : parsed.key,
             ...(isAccessoryListing(l) ? { isAccessory: true } : {}),
-          };
-        }),
+          }));
+        })(),
         ...(result.totalFound != null ? { totalFound: result.totalFound } : {}),
         ...(result.error ? { error: result.error } : {}),
         ...(result.note ? { note: result.note } : {}),

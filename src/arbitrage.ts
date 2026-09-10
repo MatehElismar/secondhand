@@ -13,6 +13,7 @@
  */
 
 import { getMarketplace } from './marketplaces/index.js';
+import { clusterKeys } from './fuzzy.js';
 import { ACCESSORY_RE, accessorySignal, isAccessoryListing, modelKey, modelsMatch, parseListingModel, parseModel, sameModel } from './models.js';
 
 // Re-exported: callers imported these from here before the parser moved into
@@ -138,7 +139,34 @@ export function groupStats(listings: any[]): GroupStat[] {
     if (u != null && u > 0) g.prices.push(u);
     groups.set(key, g);
   }
-  return [...groups.values()].map((g) => ({
+  const raw = [...groups.values()];
+
+  // Merge 'low' groups whose keys are near-identical (word reorder,
+  // colour/condition noise): their keys are the first words of a title that
+  // named no model, so "Laptop Lenovo" and "Lenovo Laptop" are the same
+  // vague bucket, and splitting them hides how common the bucket is. 'high'
+  // and 'medium' groups are structural names and never merged here: one
+  // character apart can be a different product (M2 vs M3, S23 vs S24, Xbox
+  // Series X vs S), and folding them in would price a margin off the wrong
+  // machine. The key is passed once per listing so the canonical key is the
+  // one describing the most listings.
+  const lowKeys: string[] = [];
+  for (const g of raw) if (g.confidence === 'low') for (let i = 0; i < g.count; i++) lowKeys.push(g.key);
+  const canonical = clusterKeys(lowKeys);
+  const merged = new Map<string, (typeof raw)[number]>();
+  const order: string[] = [];
+  for (const g of raw) {
+    const target = g.confidence === 'low' ? canonical.get(g.key) ?? g.key : g.key;
+    const existing = merged.get(target);
+    if (!existing) {
+      merged.set(target, { ...g, key: target });
+      order.push(target);
+      continue;
+    }
+    existing.count += g.count;
+    existing.prices.push(...g.prices);
+  }
+  return order.map((k) => merged.get(k)!).map((g) => ({
     key: g.key,
     count: g.count,
     confidence: g.confidence,
