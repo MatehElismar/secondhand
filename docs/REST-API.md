@@ -129,8 +129,10 @@ marketplace or location not found · `501` marketplace has no location support.
 
 Searches a marketplace. The response includes a `search` object carrying the
 *resolved* location the adapter actually searched with, plus the normalized
-`listings`. `minPrice`/`maxPrice` are applied by the target marketplace in its own
-currency (e.g. DOP for the Dominican Republic).
+`listings`. `minPrice`/`maxPrice` are **major units** of the target marketplace's own
+currency (DOP for the Dominican Republic), so `300` means `DOP 300`, not `DOP 3.00`.
+Adapters scale the value to whatever unit their API expects — Facebook's GraphQL
+bounds are centavos — so callers never supply minor units.
 
 **Request body**
 
@@ -140,7 +142,7 @@ currency (e.g. DOP for the Dominican Republic).
 | `query` | string | **yes** | search terms, e.g. `iphone 15` |
 | `location` | string | no | place to search around (Facebook) |
 | `radius` / `radiusMiles` | number | no | radius in miles (Facebook) |
-| `minPrice` / `maxPrice` | number | no | non-negative |
+| `minPrice` / `maxPrice` | number | no | non-negative, **major units** of the marketplace currency (`300` = DOP 300) |
 | `limit` | number | no | max results |
 | `offset` | number | no | pagination (eBay) |
 | `showSold` | boolean | no | include sold items |
@@ -265,6 +267,11 @@ marketplace has no listing-details support.
 - **Currency is the seller's**: Facebook returns prices in the local currency
   (e.g. `DOP`) as the seller entered them. Price filters are applied by the
   marketplace in that currency, not in USD.
+- **Price filter unit is major units**: `minPrice`/`maxPrice` are whole units of that
+  currency (`300` = `DOP 300`). The Facebook adapter multiplies them by 100 because
+  Facebook's GraphQL `filter_price_lower_bound`/`filter_price_upper_bound` are in
+  centavos; an absent bound stays open (`0` floor, `214748364700` ceiling). eBay uses
+  major units natively and is not scaled.
 - **Facebook result cap**: a single keyword search is paginated in 24-item pages
   via Facebook's cursor-based `SearchContentPaginationQuery`, up to a bounded
   number of pages (~240 listings). If Facebook returns its *gated* response (0
