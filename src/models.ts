@@ -57,13 +57,44 @@ export interface ParsedModel {
  * iPhone 15 Pro, and letting it into the group corrupts that group's median
  * before any buy-side filtering gets a chance to run.
  */
-export const ACCESSORY_RE =
-  /\b(case|cover|funda|carcasa|skin|sticker|bumper|wallet|holster|screen protector|protector de pantalla|tempered glass|mica|charger|cargador|cable|adapter|adaptador|earpods|airpods|headphone|headset|auricular|(lcd|oled)\\s*(screen|display|panel|assembly|replacement)|(screen|display|panel)\\s*(lcd|oled)|digitizer|back ?glass|backhousing|back housing|housing|frame|flex|connector|motherboard|logic board|camera replacement|replacement (kit|part|screen|battery|display|digitizer)|repair (kit|part)|repuesto|holder|mount|stand|tripod|lens protector|grip|strap|band only|empty box|box only|caja vac|retail box|packaging|dis[ck] drive|dualsense|dualshock|joy-?con|faceplate|cooling stand|charging (station|dock)|lot of \d+)\b/i;
+/**
+ * Parts and add-ons that are never the product, whatever else the title says.
+ *
+ * Note what is NOT here: headphones, headsets, AirPods and earbuds are
+ * products in their own right. Listing them as accessory words — they were
+ * added for phones sold with earbuds — flagged 13 of 60 real Sony WH-1000XM4
+ * listings as accessories and removed them from their own group.
+ */
+export const STRONG_ACCESSORY_RE =
+  /\b(backhousing|back housing|digitizer|motherboard|logic board|dis[ck] drive|faceplate|dualsense|dualshock|joy-?con|screen protector|protector de pantalla|tempered glass|lens protector|replacement (kit|part|screen|battery|display|digitizer)|(camera|screen|battery|display|glass|port|flex|housing|hinge|keyboard|charging port)\s+replacement|repair (kit|part)|repuesto|(lcd|oled)\s*(screen|display|panel|assembly|replacement)|(screen|display|panel)\s*(lcd|oled)|empty box|box only|caja vac|retail box|box packaging|lot of \d+|(hard|carrying|travel|protective|zipper)\s+case|case\s+(for|only)|cooling stand|charging (station|dock))\b/i;
+
+/**
+ * Words that name an accessory OR an included extra, depending on the
+ * sentence: "Headphones w/ Case" is headphones; "Headphones Hard Case" is a
+ * case. Resolved by position rather than by presence.
+ */
+const WEAK_ACCESSORY_RE =
+  /\b(case|funda|carcasa|cover|skin|sticker|bumper|wallet|holster|mica|charger|cargador|cable|adapter|adaptador|holder|mount|stand|tripod|grip|strap|band only|packaging)\b/i;
 
 /** "For iPhone 15" / "Compatible with iPhone 15" only ever precede accessories. */
-const FOR_PREFIX_RE = /^\s*(for|para|compatible (with|con)|fits)\b/i;
+const FOR_PREFIX_RE = /^\s*(for|para|compatible (with|con)|fits|replacement (for|para)|genuine\s+\w+\s+\w*\s*case)\b/i;
 
-const isAccessoryTitle = (t: string) => ACCESSORY_RE.test(t) || FOR_PREFIX_RE.test(t);
+/** The accessory word is offered alongside the product, not as the product. */
+const INCLUDED_EXTRA_RE = /\b(w\/|with|incl(?:udes|uding|uded)?|incluye|incluido|viene con|\+|&)\s*(\w+\s+){0,2}$/i;
+
+export const ACCESSORY_RE = STRONG_ACCESSORY_RE;
+
+function isAccessoryTitle(t: string): boolean {
+  if (FOR_PREFIX_RE.test(t) || STRONG_ACCESSORY_RE.test(t)) return true;
+  const m = WEAK_ACCESSORY_RE.exec(t);
+  if (!m) return false;
+  const before = t.slice(0, m.index);
+  // Offered as an extra ("... w/ Case", "... + charger") — the product is
+  // whatever came before it.
+  if (INCLUDED_EXTRA_RE.test(before)) return false;
+  // Nothing before it: the accessory is the subject of the listing.
+  return before.trim().split(/\s+/).filter(Boolean).length < 2;
+}
 
 /**
  * Storage, in GB, ignoring RAM.
@@ -235,6 +266,22 @@ export function parseModel(title: string): ParsedModel {
   const pc = parsePcLaptop(t);
   if (pc) return finish({ ...base, ...pc });
 
+  // ── Anything carrying a manufacturer model code ────────────────────────
+  const code = extractModelCode(raw);
+  if (code) {
+    const brand = CODE_BRANDS.find((b) => new RegExp(`\\b${b.replace('-', '[- ]?')}\\b`, 'i').test(t));
+    const brandName = brand ? brand.split('-').map(titleCase).join('-') : null;
+    return finish({
+      ...base,
+      brand: brandName,
+      line: brandName,
+      generation: code,
+      key: [brandName, code].filter(Boolean).join(' '),
+      // The code names one product; without a brand it is still a strong id.
+      confidence: 'high',
+    } as never);
+  }
+
   // ── Unknown ────────────────────────────────────────────────────────────
   // Two leading words was the old fallback and it grouped by noise ("Apple
   // iPhone", "New Samsung"). Strip filler first so the words carry meaning.
@@ -319,6 +366,58 @@ function parseConsole(t: string): Partial<ParsedModel> | null {
   }
   return null;
 }
+
+
+/**
+ * Manufacturer model codes — WH-1000XM4, WF-1000XM5, MDR-7506, SM-S911U.
+ *
+ * These are the most reliable identity a title can carry, and they generalize
+ * where a brand table cannot: headphones, cameras, monitors, printers. They
+ * are also written every possible way, so the code is normalized rather than
+ * matched literally — "WH-1000XM4", "WH1000XM4" and "wh 1000xm4" are one
+ * product, and the old fallback split them into three groups while merging
+ * XM4 with XM5 by truncating both at the hyphen.
+ */
+// Hyphenated or joined: "WH-1000XM4", "WH1000XM4", "WH-CH520", "MDR-7506".
+const CODE_JOINED_RE = /\b([a-z]{1,4}-?[a-z]{0,3}\d{2,5}[a-z]{0,4}\d{0,2})\b/gi;
+// Space-separated: "wh 1000xm4". The prefix is capped at three letters so a
+// brand word cannot be swallowed — "Sony wh1000xm4" must not read as one
+// token "SONYWH1000XM4", which would not match "WH1000XM4" from the next
+// listing of the same headphones.
+const CODE_SPACED_RE = /\b([a-z]{2,3})\s(\d{3,5}[a-z]{0,4}\d{0,2})\b/gi;
+
+/** Tokens shaped like a model code that never are one. */
+const NOT_A_CODE = /^(usb\d|hdmi\d|mp\d|led\d|lcd\d|dc\d|ac\d|no\d|v\d{2,}|win\d|ddr\d|pcie\d|sata\d|cat\d)$/i;
+/** Capacity, resolution and speed read as codes if not excluded. */
+const MEASUREMENT = /\d+(gb|tb|mb|kb|hz|mah|mm|cm|w|v|k|p)$/i;
+
+function acceptCode(raw: string, title: string, index: number): string | null {
+  const token = raw.replace(/[-\s]/g, '').toUpperCase();
+  if (token.length < 5) return null;
+  if (NOT_A_CODE.test(token) || MEASUREMENT.test(token)) return null;
+  // A CPU part number identifies a component, not the product for sale.
+  const before = title.slice(Math.max(0, index - 12), index).toLowerCase();
+  if (/\b(i[3579]|ryzen|core|celeron|pentium|athlon)\s*-?\s*$/.test(before)) return null;
+  // A code has to mix letters and digits.
+  if (!/[a-z]/i.test(token) || !/\d/.test(token)) return null;
+  return token;
+}
+
+export function extractModelCode(title: string): string | null {
+  const t = String(title || '');
+  for (const m of t.matchAll(CODE_JOINED_RE)) {
+    const code = acceptCode(m[1], t, m.index!);
+    if (code) return code;
+  }
+  for (const m of t.matchAll(CODE_SPACED_RE)) {
+    const code = acceptCode(m[1] + m[2], t, m.index!);
+    if (code) return code;
+  }
+  return null;
+}
+
+/** Known brands, for pairing with a bare model code. */
+const CODE_BRANDS = ['sony', 'bose', 'jbl', 'sennheiser', 'audio-technica', 'beats', 'anker', 'soundcore', 'skullcandy', 'canon', 'nikon', 'fujifilm', 'panasonic', 'gopro', 'dji', 'garmin', 'logitech', 'razer', 'steelseries', 'corsair', 'epson', 'brother', 'lg', 'philips', 'xiaomi', 'motorola', 'google', 'oneplus', 'huawei', 'oppo', 'realme', 'tcl', 'hisense', 'roku', 'netgear', 'tp-link', 'asus', 'acer', 'dell', 'hp', 'lenovo', 'samsung', 'apple', 'nintendo', 'microsoft'];
 
 /** Brands and product lines that actually identify a Windows laptop. */
 const PC_BRANDS = ['dell', 'hp', 'lenovo', 'acer', 'asus', 'msi', 'toshiba', 'razer', 'samsung', 'microsoft', 'alienware', 'gateway', 'huawei', 'lg'];

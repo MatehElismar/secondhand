@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { modelKey, modelFamily, modelsMatch, parseModel, parseStorage, sameModel } from '../src/models.js';
+import { extractModelCode, modelKey, modelFamily, modelsMatch, parseModel, parseStorage, sameModel } from '../src/models.js';
 
 describe('parseStorage', () => {
   it('never mistakes RAM for storage', () => {
@@ -228,5 +228,66 @@ describe('modelsMatch', () => {
   it('treats capacity as a wildcard only when one side omits it', () => {
     expect(modelsMatch(m('PS5 Slim Digital'), m('PS5 Slim Digital 1TB'))).toBe(true);
     expect(modelsMatch(m('iPhone 15 Pro 128GB'), m('iPhone 15 Pro 512GB'))).toBe(false);
+  });
+});
+
+describe('manufacturer model codes', () => {
+  it('collapses every spelling of one code into one product', () => {
+    // These were four groups; the fallback also truncated at the hyphen, which
+    // merged WH-1000XM4 with WH-1000XM5 under "Audifonos Sony Wh".
+    const same = [
+      'Audífonos Sony WH-1000XM4',
+      'Auriculares Sony WH-1000XM4',
+      'Sony WH-1000XM4',
+      'sony wh-1000xm4',
+      'Sony wh1000xm4 nuevo sellado Original',
+      'Sony WH1000XM4/S Premium Noise Cancelling Wireless',
+      'Sony wh 1000xm4',
+    ];
+    expect(new Set(same.map(modelKey))).toEqual(new Set(['Sony WH1000XM4']));
+  });
+
+  it('never merges neighbouring codes, which differ by one character', () => {
+    const keys = ['Sony WH-1000XM4', 'Sony WH-1000XM5', 'Sony WH-1000XM6', 'Sony WH-CH520'].map(modelKey);
+    expect(new Set(keys).size).toBe(4);
+  });
+
+  it('does not read a brand word as part of the code', () => {
+    expect(extractModelCode('Sony wh1000xm4 nuevo')).toBe('WH1000XM4');
+  });
+
+  it('ignores CPU part numbers, capacity and resolution', () => {
+    expect(extractModelCode('Dell Latitude 14" Laptop Intel i5-1145G7 16GB RAM')).not.toBe('I51145G7');
+    expect(extractModelCode('Samsung 65" 4K TV 60Hz 500GB')).toBeNull();
+  });
+});
+
+describe('accessory words that are also products', () => {
+  it('does not treat headphones as an accessory', () => {
+    // "headphone"/"headset"/"airpods" were accessory keywords, which flagged
+    // 13 of 60 real WH-1000XM4 listings and removed them from their own group.
+    for (const t of [
+      'Sony WH-1000XM4 Over the Ear Wireless Headset - Black',
+      'Sony WH-1000XM4 Over-Ear Headphones Light Gray Noise Canceling w/ Case',
+      'Sony WH-1000XM4 Black Bluetooth Wireless Headphone w/ Case. Excellent',
+      'Sony WH-1000XM4 Blue - NEW EARCUPS & Complete Original Packaging',
+    ]) {
+      expect(parseModel(t).isAccessory, t).toBe(false);
+    }
+  });
+
+  it('still catches the listing whose subject is the case', () => {
+    for (const t of [
+      'Genuine Sony WH-1000XM3 WH-1000XM4 XM2 Headphones Hard Case Black Zipper',
+      'Sony Original Carrying Case For Headphones SONY WH-1000XM4/B BLACK',
+      'Replacement For Sony WH-1000XM4 Headphones Plastic Hinge Swivel',
+      'Apple iPhone Retail Box Packaging Purple 128GB',
+    ]) {
+      expect(parseModel(t).isAccessory, t).toBe(true);
+    }
+  });
+
+  it('reads an included extra as an extra, not as the product', () => {
+    expect(parseModel('Apple iPhone 15 Pro 256GB Unlocked - includes case and charger').isAccessory).toBe(false);
   });
 });
