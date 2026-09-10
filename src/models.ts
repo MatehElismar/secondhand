@@ -84,6 +84,48 @@ const INCLUDED_EXTRA_RE = /\b(w\/|with|incl(?:udes|uding|uded)?|incluye|incluido
 
 export const ACCESSORY_RE = STRONG_ACCESSORY_RE;
 
+/**
+ * Marketplace categories that describe an add-on rather than the product.
+ * eBay sorts its own catalogue far more reliably than a title can be read:
+ * for "sony wh-1000xm4" it reports 40 Headphones, 6 Cases/Covers/Skins, 3
+ * Headsets and 1 Replacement Parts — no keyword guessing required.
+ */
+const ACCESSORY_CATEGORY_RE =
+  /\b(cases?|covers?|skins?|screen protectors?|replacement parts?|parts? & tools?|smartphone parts|laptop screens?|lcd panels?|motherboards?|batteries|chargers?|cables?|adapters?|mounts?|stands?|accessor(y|ies)|straps?|bands?)\b/i;
+
+/** Does the marketplace itself file this listing under accessories or parts? */
+export function categoryIsAccessory(category?: string | null): boolean {
+  return Boolean(category && ACCESSORY_CATEGORY_RE.test(category));
+}
+
+/**
+ * How strongly a listing looks like an add-on rather than the product.
+ *
+ *  'strong' — the title says so unambiguously ("Replacement For…", "Case for
+ *             iPhone", a backhousing). Safe to drop on its own.
+ *  'weak'   — the marketplace filed it under an accessory category, or a
+ *             sentence-dependent word appeared in subject position. Sellers
+ *             miscategorize: three real WH-1000XM4 headphones, priced at ~$100
+ *             against a $130 device median, sit under "Cases, Covers & Skins".
+ *             So this needs the price to agree before it is acted on.
+ *  'none'   — looks like the product.
+ */
+export function accessorySignal(l: { title?: string; category?: string | null }): 'strong' | 'weak' | 'none' {
+  const title = String(l.title || '');
+  if (FOR_PREFIX_RE.test(title) || STRONG_ACCESSORY_RE.test(title)) return 'strong';
+  if (categoryIsAccessory(l.category) || isAccessoryTitle(title)) return 'weak';
+  return 'none';
+}
+
+/**
+ * Verdict for callers that have no price to weigh. Treats 'weak' as accessory,
+ * which is right for display but too blunt for pricing — those callers should
+ * use accessorySignal and check the price themselves.
+ */
+export function isAccessoryListing(l: { title?: string; category?: string | null }): boolean {
+  return accessorySignal(l) !== 'none';
+}
+
 function isAccessoryTitle(t: string): boolean {
   if (FOR_PREFIX_RE.test(t) || STRONG_ACCESSORY_RE.test(t)) return true;
   const m = WEAK_ACCESSORY_RE.exec(t);

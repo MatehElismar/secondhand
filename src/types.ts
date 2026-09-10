@@ -16,6 +16,13 @@ export interface Listing {
   condition?: string;
   marketplace: string;
   scrapedAt: string;
+  /**
+   * Marketplace's own category for the listing, e.g. "Headphones" or "Cases,
+   * Covers & Skins". More reliable than reading the title, because it is the
+   * marketplace asserting what the thing is.
+   */
+  category?: string;
+  categoryId?: string;
   /** eBay: how the item can be bought, e.g. FIXED_PRICE, AUCTION, BEST_OFFER. */
   buyingOptions?: string[];
   /** eBay auctions: bids so far. Present only when the item accepts bids. */

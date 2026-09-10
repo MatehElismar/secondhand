@@ -13,11 +13,11 @@
  */
 
 import { getMarketplace } from './marketplaces/index.js';
-import { ACCESSORY_RE, modelKey, modelsMatch, parseModel, sameModel } from './models.js';
+import { ACCESSORY_RE, accessorySignal, isAccessoryListing, modelKey, modelsMatch, parseModel, sameModel } from './models.js';
 
 // Re-exported: callers imported these from here before the parser moved into
 // its own module.
-export { modelKey, modelsMatch, parseModel, sameModel } from './models.js';
+export { isAccessoryListing, modelKey, modelsMatch, parseModel, sameModel } from './models.js';
 
 const FX_DOP_PER_USD = 60; // heuristic; adjust to current rate
 // The SEARCHED marketplace (primary) is the SELL/target market; the OTHER
@@ -104,12 +104,25 @@ export function statsOf(prices: number[]): PriceStats {
 }
 
 export function groupStats(listings: any[]): GroupStat[] {
+  // A provisional median, so a 'weak' accessory signal can be weighed against
+  // the price before it removes anything. Sellers miscategorize, and what they
+  // miscategorize is often the cheap listing that mattered.
+  const allPrices = listings
+    .map((l) => toUsd(l.priceNumeric, l.currency))
+    .filter((v): v is number => v != null && v > 0);
+  const roughMedian = statsOf(allPrices).median ?? 0;
+
   const groups = new Map<string, { key: string; count: number; prices: number[]; confidence: GroupStat['confidence'] }>();
   for (const l of listings) {
     // Parts and accessories are not the product. Letting them form or join a
     // group corrupts the sell-side median before any buy-side filter runs.
+    const signal = accessorySignal(l);
+    if (signal === 'strong') continue;
+    if (signal === 'weak') {
+      const p = toUsd(l.priceNumeric, l.currency);
+      if (p != null && roughMedian > 0 && p < roughMedian * 0.6) continue;
+    }
     const parsed = parseModel(String(l.title || ''));
-    if (parsed.isAccessory) continue;
     const key = parsed.key || 'Other';
     const g = groups.get(key) || { key, count: 0, prices: [], confidence: parsed.confidence };
     g.count += 1;
@@ -131,7 +144,7 @@ export function groupStats(listings: any[]): GroupStat[] {
  * leaving them in would surface the worst units as the best margins.
  */
 const BROKEN_RE =
-  /\b(for parts|parts only|not working|no funciona|broken|roto|cracked|crack|damaged|dañad|(heavy|deep|bad|major|lots of)\s+scratch|scratched|rough condition|poor condition|as is|as-is|bad esn|bad imei|icloud lock|activation lock|blacklisted|no power|does not|doesn'?t work|read description|carrier locked|locked to|network locked|(?<!\b(?:no|nothing|not|sin)\s)missing\s+\w+|(t-?mobile|at&t|verizon|sprint|cricket|boost|metropcs) only)\b/i;
+  /\b(for parts|parts only|not working|no funciona|broken|roto|cracked|crack|damaged|dañad|(heavy|deep|bad|major|lots of)\s+scratch|scratched|(rough|poor|bad|fair|rugged|mala?) condition|mal estado|para reparar|as is|as-is|bad esn|bad imei|icloud lock|activation lock|blacklisted|no power|does not|doesn'?t work|read description|carrier locked|locked to|network locked|(?<!\b(?:no|nothing|not|sin)\s)missing\s+\w+|(t-?mobile|at&t|verizon|sprint|cricket|boost|metropcs) only)\b/i;
 
 const isPartsLike = (l: any) => BROKEN_RE.test(String(l?.title || '')) || BROKEN_RE.test(String(l?.condition || ''));
 
@@ -173,8 +186,8 @@ export function filterBuyable<T extends { title?: string; priceNumeric?: number;
   const rawMedian = trustworthy ? statsOf(withPrice.map((l) => priceOf(l) as number)).median ?? 0 : 0;
 
   const passA = withPrice.filter((l) => {
-    if (isPartsLike(l)) return false;
-    const looksAccessory = ACCESSORY_RE.test(String(l.title || ''));
+    if (isPartsLike(l) || accessorySignal(l as any) === 'strong') return false;
+    const looksAccessory = accessorySignal(l as any) === 'weak';
     if (!looksAccessory) return true;
     // With a usable median, let the price vouch for a device that merely
     // mentions an accessory. Without one, the keyword decides alone: dropping a

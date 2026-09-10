@@ -88,6 +88,17 @@ describe('filterBuyable', () => {
       .toContain(good);
   });
 
+  it('rejects a bargain whose own title admits the condition', () => {
+    const base = [phone(520), phone(540), phone(560), phone(580)];
+    for (const title of [
+      'Bad Condition Sony WH-1000XM4 Black Wireless Headphones',
+      'Sony WH-1000XM4 - poor condition, para reparar',
+    ]) {
+      expect(filterBuyable([...base, { title, priceNumeric: 200 }], price).kept.map((l) => l.title))
+        .not.toContain(title);
+    }
+  });
+
   it('drops multi-unit lots far above the median', () => {
     const listings = [phone(500), phone(520), phone(540), phone(560), phone(4200, 'Lot of 8 iPhone 15 Pro')];
     const { kept } = filterBuyable(listings, price);

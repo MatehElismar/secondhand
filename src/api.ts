@@ -30,7 +30,7 @@ import {
   getAllMarketplaces,
 } from './marketplaces/index.js';
 import { runArbitrage } from './arbitrage.js';
-import { modelFamily, parseModel } from './models.js';
+import { isAccessoryListing, modelFamily, parseModel } from './models.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import { SearchParams, ListingDetails, LocationCoordinates } from './types.js';
@@ -66,6 +66,8 @@ const listingProps: Record<string, unknown> = {
   bidCount: { type: 'number' },
   endsAt: { type: 'string' },
   auctionOnly: { type: 'boolean' },
+  category: { type: 'string' },
+  categoryId: { type: 'string' },
   // Canonical model, resolved server-side. The browser used to re-implement
   // this and the two copies had already drifted apart.
   model: { type: 'string' },
@@ -458,7 +460,7 @@ export async function buildApiServer(): Promise<FastifyInstance> {
             ...l,
             model: parsed.key,
             modelFamily: modelFamily(String(l.title || '')),
-            ...(parsed.isAccessory ? { isAccessory: true } : {}),
+            ...(isAccessoryListing(l) ? { isAccessory: true } : {}),
           };
         }),
         ...(result.totalFound != null ? { totalFound: result.totalFound } : {}),

@@ -330,6 +330,8 @@ export class EbayMarketplace extends BaseMarketplace {
           seller: item.seller?.username,
           marketplace: this.name,
           scrapedAt: new Date().toISOString(),
+          category: item.categories?.[0]?.categoryName,
+          categoryId: item.categories?.[0]?.categoryId,
           buyingOptions: buyingOptions.length > 0 ? buyingOptions : undefined,
           bidCount: typeof item.bidCount === 'number' ? item.bidCount : undefined,
           endsAt: item.itemEndDate,

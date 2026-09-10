@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractModelCode, modelKey, modelFamily, modelsMatch, parseModel, parseStorage, sameModel } from '../src/models.js';
+import { accessorySignal, categoryIsAccessory, extractModelCode, modelKey, modelFamily, modelsMatch, parseModel, parseStorage, sameModel } from '../src/models.js';
 
 describe('parseStorage', () => {
   it('never mistakes RAM for storage', () => {
@@ -289,5 +289,33 @@ describe('accessory words that are also products', () => {
 
   it('reads an included extra as an extra, not as the product', () => {
     expect(parseModel('Apple iPhone 15 Pro 256GB Unlocked - includes case and charger').isAccessory).toBe(false);
+  });
+});
+
+describe('marketplace category as a signal', () => {
+  it('reads the marketplace category when it gives one', () => {
+    expect(categoryIsAccessory('Cases, Covers & Skins')).toBe(true);
+    expect(categoryIsAccessory('Replacement Parts & Tools')).toBe(true);
+    expect(categoryIsAccessory('Cell Phone & Smartphone Parts')).toBe(true);
+    expect(categoryIsAccessory('Headphones')).toBe(false);
+    expect(categoryIsAccessory('Video Game Consoles')).toBe(false);
+    expect(categoryIsAccessory('Apple Laptops')).toBe(false);
+  });
+
+  it('treats a category verdict as weak, because sellers miscategorize', () => {
+    // Three real WH-1000XM4 headphones, priced near the $130 device median,
+    // were filed by their sellers under "Cases, Covers & Skins". A weak signal
+    // is checked against the price before it removes anything.
+    expect(accessorySignal({
+      title: 'Sony WH-1000XM4 Premium Wireless Noise Canceling Headphones',
+      category: 'Cases, Covers & Skins',
+    })).toBe('weak');
+  });
+
+  it('keeps an unambiguous parts title strong regardless of category', () => {
+    expect(accessorySignal({
+      title: 'Replacement For Sony WH-1000XM4 Headphones Plastic Hinge',
+      category: 'Headphones',
+    })).toBe('strong');
   });
 });
