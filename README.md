@@ -154,8 +154,8 @@ Search for items across marketplaces.
 | `marketplace` | No | `facebook` | `facebook`, `ebay`, `depop`, `poshmark`, or `all` |
 | `location` | No | `san francisco` | City to search in (Facebook only) |
 | `radiusMiles` | No | `25` | Search radius in miles, up to 500 (Facebook only) |
-| `maxPrice` | No | | Maximum price |
-| `minPrice` | No | | Minimum price |
+| `maxPrice` | No | | Maximum price, in whole units of the marketplace currency (`600` = `DOP 600`, not `$6`) |
+| `minPrice` | No | | Minimum price, in whole units of the marketplace currency (`300` = `DOP 300`, not `$3`) |
 | `limit` | No | `20` | Max results |
 | `showSold` | No | `false` | Include sold items (Facebook only) |
 | `includeImages` | No | `false` | Accepted for compatibility — image URLs and the seller name are now always included when available |
@@ -321,6 +321,11 @@ Depop/Poshmark need Chrome to be registered (see Configuration).
 
 The `search.location` above is the *resolved* coordinate for the search, populated
 by the marketplace's own `getLocation()` — nothing is hard-coded.
+
+The `minPrice: 300` / `maxPrice: 600` bounds in that request are **DOP**, so the
+`DOP500` listing is inside the range. Facebook's GraphQL price filters are in
+centavos; the adapter scales the bounds (300 -> `30000`, 600 -> `60000`) before
+sending them, so the example above only returns in-range listings.
 
 **`GET /v1/listings/facebook/1589159836094134`**
 

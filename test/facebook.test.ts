@@ -352,15 +352,67 @@ describe('search requests and parsing', () => {
     expect(result.totalFound).toBe(3);
   });
 
-  it('passes the price bounds through, with a sentinel for an open upper bound', async () => {
+  it('sends the price bounds in minor units, with a sentinel for an open upper bound', async () => {
     const { calls } = stubFetch(() => json(searchBody([])));
 
     await search({ minPrice: 25 });
 
     const browse = calls[0].variables.params.browse_request_params;
-    expect(browse.filter_price_lower_bound).toBe(25);
+    expect(browse.filter_price_lower_bound).toBe(2500);
     expect(browse.filter_price_upper_bound).toBe(214748364700);
     expect(calls[0].variables.params.bqf.query).toBe('bike');
+  });
+
+  it('converts both bounds to minor units', async () => {
+    const { calls } = stubFetch(() => json(searchBody([])));
+
+    await search({ minPrice: 25, maxPrice: 50 });
+
+    const browse = calls[0].variables.params.browse_request_params;
+    expect(browse.filter_price_lower_bound).toBe(2500);
+    expect(browse.filter_price_upper_bound).toBe(5000);
+  });
+
+  it('keeps absent bounds open and a zero floor at zero', async () => {
+    const { calls } = stubFetch(() => json(searchBody([])));
+
+    await search({});
+    await search({ minPrice: 0 });
+
+    const [open, zeroFloor] = calls.map((c) => c.variables.params.browse_request_params);
+    expect(open.filter_price_lower_bound).toBe(0);
+    expect(open.filter_price_upper_bound).toBe(214748364700);
+    expect(zeroFloor.filter_price_lower_bound).toBe(0);
+    expect(zeroFloor.filter_price_upper_bound).toBe(214748364700);
+  });
+
+  it('never sends a fractional minor unit to Facebook', async () => {
+    const { calls } = stubFetch(() => json(searchBody([])));
+
+    await search({ minPrice: 0.1, maxPrice: 12.345 });
+
+    const browse = calls[0].variables.params.browse_request_params;
+    expect(browse.filter_price_lower_bound).toBe(10);
+    expect(browse.filter_price_upper_bound).toBe(1235);
+    expect(Number.isInteger(browse.filter_price_lower_bound)).toBe(true);
+    expect(Number.isInteger(browse.filter_price_upper_bound)).toBe(true);
+  });
+
+  it('converts realistic and half-centavo bounds to centavos', async () => {
+    const { calls } = stubFetch(() => json(searchBody([])));
+
+    // 50,000 is the live probe value that Facebook had been applying as DOP 500.
+    await search({ minPrice: 50000, maxPrice: 0 });
+    await search({ minPrice: 1190, maxPrice: 1190.01 });
+    await search({ minPrice: 25.555 });
+
+    const browse = (i: number) => calls[i].variables.params.browse_request_params;
+    expect(browse(0).filter_price_lower_bound).toBe(5000000);
+    expect(browse(0).filter_price_upper_bound).toBe(0);
+    expect(browse(1).filter_price_lower_bound).toBe(119000);
+    expect(browse(1).filter_price_upper_bound).toBe(119001);
+    expect(browse(2).filter_price_lower_bound).toBe(2556);
+    expect(browse(2).filter_price_upper_bound).toBe(214748364700);
   });
 
   it('flags a payload whose shape it does not recognise when the page fallback fails too', async () => {

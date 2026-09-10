@@ -64,8 +64,21 @@ const SEARCH_PAGE_HEADERS: Record<string, string> = {
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
 };
 
-// Max price value Facebook uses as "no upper limit"
+// Facebook's GraphQL price filters are expressed in MINOR units (centavos), not
+// whole pesos: the bounds are scaled by 100 on the wire. MAX_PRICE_SENTINEL below
+// is already written that way (2147483647 * 100), which is why the conversion has
+// to happen here — sending major units makes Facebook apply a bound 100x lower on
+// the floor and 100x tighter on the ceiling.
+const MINOR_UNITS_PER_MAJOR = 100;
+
+// Max price value Facebook uses as "no upper limit" (already in minor units)
 const MAX_PRICE_SENTINEL = 214748364700;
+
+// Major units (DOP) -> minor units (centavos). Rounded so a fractional input can
+// never put a non-integer price bound on the wire.
+function toMinorUnits(value: number): number {
+  return Math.round(value * MINOR_UNITS_PER_MAJOR);
+}
 
 // Residential proxy for Facebook requests (avoids datacenter IP rate limits)
 const proxyAgent = process.env.SMARTPROXY_URL
@@ -330,8 +343,9 @@ export class FacebookMarketplace extends BaseMarketplace {
         commerce_search_and_rp_ctime_days: null,
         filter_location_latitude: coords.latitude,
         filter_location_longitude: coords.longitude,
-        filter_price_lower_bound: minPrice ?? 0,
-        filter_price_upper_bound: maxPrice ?? MAX_PRICE_SENTINEL,
+        filter_price_lower_bound: minPrice != null ? toMinorUnits(minPrice) : 0,
+        filter_price_upper_bound:
+          maxPrice != null ? toMinorUnits(maxPrice) : MAX_PRICE_SENTINEL,
         filter_radius_km: Math.round(radiusMiles * KM_PER_MILE),
       },
       custom_request_params: {

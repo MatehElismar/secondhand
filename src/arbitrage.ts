@@ -79,10 +79,26 @@ export interface ArbitrageOptions {
   maxEnrich?: number;
 }
 
+/**
+ * Convert a listing's price to USD.
+ *
+ * The rate table is deliberately tiny: only the rates we actually hold. `DOP` is
+ * the local market this comparison exists for; `USD` and `$` are already dollars.
+ * Everything else returns `null` — the callers below drop nulls, so an unknown
+ * currency excludes a listing instead of pricing a margin off an invented rate.
+ *
+ * `$` is ambiguous in a listing string (see parsePrice) and is therefore taken at
+ * face value: a dollar figure, never silently multiplied to pesos. The browser
+ * helper in public/fx.js mirrors this contract, and
+ * test/arbitrage-conversion.test.ts drives both from one table so the two copies
+ * cannot drift apart again.
+ */
 export function toUsd(n: number | undefined, currency?: string): number | null {
   if (n == null) return null;
   const c = String(currency || '').toUpperCase();
-  return c === 'DOP' ? n / FX_DOP_PER_USD : n;
+  if (c === 'DOP') return n / FX_DOP_PER_USD;
+  if (c === 'USD' || c === '$') return n;
+  return null;
 }
 
 export function dollar(n: number | null | undefined): number | null {
