@@ -13,11 +13,11 @@
  */
 
 import { getMarketplace } from './marketplaces/index.js';
-import { ACCESSORY_RE, accessorySignal, isAccessoryListing, modelKey, modelsMatch, parseModel, sameModel } from './models.js';
+import { ACCESSORY_RE, accessorySignal, isAccessoryListing, modelKey, modelsMatch, parseListingModel, parseModel, sameModel } from './models.js';
 
 // Re-exported: callers imported these from here before the parser moved into
 // its own module.
-export { isAccessoryListing, modelKey, modelsMatch, parseModel, sameModel } from './models.js';
+export { isAccessoryListing, modelKey, modelsMatch, parseListingModel, parseModel, sameModel } from './models.js';
 
 const FX_DOP_PER_USD = 60; // heuristic; adjust to current rate
 // The SEARCHED marketplace (primary) is the SELL/target market; the OTHER
@@ -68,6 +68,14 @@ export interface ArbitrageOptions {
   buyingFormat?: 'any' | 'fixed' | 'auction';
   /** With buyingFormat 'auction': only bids closing within this many minutes. */
   endingWithinMinutes?: number;
+  /**
+   * Fetch descriptions for listings whose title did not identify a model, and
+   * reclassify them. Costs one request per such listing, so it is bounded by
+   * maxEnrich and skipped entirely when every title already parsed cleanly.
+   */
+  enrichDescriptions?: boolean;
+  /** Ceiling on those extra requests. Default 40. */
+  maxEnrich?: number;
 }
 
 export function toUsd(n: number | undefined, currency?: string): number | null {
@@ -122,7 +130,7 @@ export function groupStats(listings: any[]): GroupStat[] {
       const p = toUsd(l.priceNumeric, l.currency);
       if (p != null && roughMedian > 0 && p < roughMedian * 0.6) continue;
     }
-    const parsed = parseModel(String(l.title || ''));
+    const parsed = parseListingModel(l);
     const key = parsed.key || 'Other';
     const g = groups.get(key) || { key, count: 0, prices: [], confidence: parsed.confidence };
     g.count += 1;
@@ -228,6 +236,50 @@ export function bucketize(prices: number[], buckets = 6): Array<{ from: number; 
   return out;
 }
 
+
+/**
+ * Fill in descriptions for the listings the title could not identify.
+ *
+ * Bounded on purpose: a 500-listing search would otherwise mean 500 extra
+ * requests to a marketplace that does not want to be scraped that hard. Only
+ * listings that would otherwise be unclassifiable are worth the call, so a
+ * search where every title parsed cleanly costs nothing at all.
+ */
+async function enrichLowConfidence(
+  marketplace: any,
+  listings: any[],
+  maxEnrich: number,
+): Promise<{ attempted: number; enriched: number }> {
+  const getDetails = marketplace?.getListingDetails;
+  if (typeof getDetails !== 'function') return { attempted: 0, enriched: 0 };
+
+  const targets = listings.filter((l) => {
+    if (accessorySignal(l) === 'strong') return false;
+    return parseModel(String(l.title || '')).confidence !== 'high';
+  });
+  if (!targets.length) return { attempted: 0, enriched: 0 };
+
+  const slice = targets.slice(0, maxEnrich);
+  let enriched = 0;
+  const CONCURRENCY = 4; // polite, and enough to keep the wall clock sane
+  for (let i = 0; i < slice.length; i += CONCURRENCY) {
+    await Promise.all(
+      slice.slice(i, i + CONCURRENCY).map(async (l) => {
+        try {
+          const d = await getDetails.call(marketplace, l.id);
+          if (d?.description) {
+            l.description = d.description;
+            if (parseListingModel(l).confidence !== 'low') enriched += 1;
+          }
+        } catch {
+          // A listing that will not load stays classified by its title.
+        }
+      }),
+    );
+  }
+  return { attempted: slice.length, enriched };
+}
+
 export async function runArbitrage(opts: ArbitrageOptions) {
   const marketplace = opts.marketplace || 'facebook';
   const secondaryName = marketplace === 'facebook' ? 'ebay' : 'facebook';
@@ -252,6 +304,16 @@ export async function runArbitrage(opts: ArbitrageOptions) {
 
   const primaryResult = await primary.search(params);
   const listings = primaryResult.listings || [];
+
+  // Titles alone leave many listings unidentifiable ("Laptop Lenovo"), and
+  // grouping happens here, on the primary market, before the other market is
+  // ever queried — so this is the only place where reading a description can
+  // still change the answer.
+  const enrichment =
+    opts.enrichDescriptions === false
+      ? { attempted: 0, enriched: 0 }
+      : await enrichLowConfidence(primary, listings, opts.maxEnrich ?? 40);
+
   const allModels = groupStats(listings);
 
   const priced = listings.map((l: any) => toUsd(l.priceNumeric, l.currency)).filter((v): v is number => v != null && v > 0);
@@ -385,6 +447,8 @@ export async function runArbitrage(opts: ArbitrageOptions) {
     radius: opts.radius,
     limit,
     totals,
+    /** Extra description requests made, and how many produced a better key. */
+    enrichment,
     allModels,
     /**
      * Groups big enough to compare but too vaguely described to identify.

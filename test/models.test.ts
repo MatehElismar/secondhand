@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accessorySignal, categoryIsAccessory, extractModelCode, modelKey, modelFamily, modelsMatch, parseModel, parseStorage, sameModel } from '../src/models.js';
+import { accessorySignal, categoryIsAccessory, extractModelCode, parseListingModel, modelKey, modelFamily, modelsMatch, parseModel, parseStorage, sameModel } from '../src/models.js';
 
 describe('parseStorage', () => {
   it('never mistakes RAM for storage', () => {
@@ -317,5 +317,37 @@ describe('marketplace category as a signal', () => {
       title: 'Replacement For Sony WH-1000XM4 Headphones Plastic Hinge',
       category: 'Headphones',
     })).toBe('strong');
+  });
+});
+
+describe('parseListingModel', () => {
+  it('recovers a model the seller only wrote in the description', () => {
+    // Facebook titles are often just a category and a brand.
+    const cases: Array<[string, string, string]> = [
+      ['Laptop Dell', 'Dell Latitude 5480 i5 7th gen 16gb ram 256 ssd', 'Dell Latitude 5480'],
+      ['Laptop Lenovo', 'Lenovo IdeaPad 3 15ITL6, Core i5 1135G7, 8GB RAM', 'Lenovo Ideapad 15ITL6'],
+    ];
+    for (const [title, description, expected] of cases) {
+      expect(parseModel(title).confidence).toBe('low');
+      const enriched = parseListingModel({ title, description });
+      expect(enriched.key).toBe(expected);
+      expect(enriched.confidence).toBe('high');
+    }
+  });
+
+  it('leaves the listing alone when the description says nothing either', () => {
+    const l = { title: 'Laptop hp', description: 'Vendo laptop en buen estado, poco uso, con cargador' };
+    expect(parseListingModel(l).confidence).toBe('low');
+  });
+
+  it('ignores a description that contradicts the title', () => {
+    // Sellers cross-reference other products: the title still decides the line.
+    const l = { title: 'Apple iPhone 15 Pro 256GB', description: 'Cambio por Samsung Galaxy S23 Ultra 512GB' };
+    expect(parseListingModel(l).key).toBe('iPhone 15 Pro 256GB');
+  });
+
+  it('does not spend the description when the title already identified it', () => {
+    const l = { title: 'Apple iPhone 15 Pro 256GB Unlocked', description: 'x'.repeat(50) };
+    expect(parseListingModel(l).key).toBe(parseModel(l.title).key);
   });
 });

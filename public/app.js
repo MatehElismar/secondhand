@@ -253,6 +253,7 @@ async function runArbitrage(e) {
     maxPrice: num($('#maxPrice')), limit: num($('#limit')) || 40,
     topN: 3, minMatches: 3,
     ...buyingFormatParams(),
+    enrichDescriptions: $('#enrich').checked,
   };
   const res = $('#arbRes');
   clearArbitrage();
@@ -487,6 +488,12 @@ function renderArbitrage(data) {
   if (!t.success) note.push(`El mercado de origen devolvió error: ${t.error || 'desconocido'}`);
   // "Nothing qualified" and "your search was too generic to compare" are
   // different answers, and the second one is actionable.
+  const enr = data.enrichment;
+  if (enr && enr.attempted) {
+    note.push(
+      `Se leyeron ${enr.attempted} descripción(es) porque el título no decía el modelo; ${enr.enriched} sirvieron para identificarlo.`
+    );
+  }
   const vague = data.skippedVague || [];
   if (vague.length) {
     const top = vague.slice(0, 3).map((v) => `${v.key} (${v.count})`).join(', ');

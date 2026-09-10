@@ -505,6 +505,18 @@ export async function buildApiServer(): Promise<FastifyInstance> {
               description:
                 'With buyingFormat=auction: only bids closing within this many minutes. Near close the current bid approximates the final price.',
             },
+            enrichDescriptions: {
+              type: 'boolean',
+              default: true,
+              description:
+                'Fetch the description for listings whose title did not identify a model, and reclassify them. Costs one extra request per such listing (bounded by maxEnrich); a search where every title parsed cleanly costs nothing.',
+            },
+            maxEnrich: {
+              type: 'number',
+              minimum: 0,
+              default: 40,
+              description: 'Ceiling on those extra description requests.',
+            },
           },
         },
       },
@@ -528,6 +540,8 @@ export async function buildApiServer(): Promise<FastifyInstance> {
           minMatches: body.minMatches as number | undefined,
           buyingFormat: body.buyingFormat as 'any' | 'fixed' | 'auction' | undefined,
           endingWithinMinutes: body.endingWithinMinutes as number | undefined,
+          enrichDescriptions: body.enrichDescriptions as boolean | undefined,
+          maxEnrich: body.maxEnrich as number | undefined,
         });
         return result;
       } catch (error) {

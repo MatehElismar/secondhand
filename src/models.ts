@@ -491,7 +491,12 @@ function parsePcLaptop(t: string): Partial<ParsedModel> | null {
   let model: string | null = null;
   if (line) {
     const after = t.slice(t.toLowerCase().indexOf(line) + line.length);
-    const m = after.match(/^[\s-]*((?:[a-z]{1,2}\d{2,4}[a-z]{0,3})|(?:\d{3,4}[a-z]{0,3}))\b/i);
+    // Lenovo and HP put the code after a series number ("IdeaPad 3 15ITL6",
+    // "Pavilion 15ba022nr"), and those codes lead with the screen size, so a
+    // letters-first pattern alone misses them.
+    const m = after.match(
+      /^[\s-]*(?:\d\s+)?((?:[a-z]{1,2}\d{2,4}[a-z]{0,3}\d{0,2})|(?:\d{2,4}[a-z]{2,6}\d{0,2})|(?:\d{3,4}[a-z]{0,3}))\b/i,
+    );
     if (m) {
       const token = m[1];
       // 13/14/15/16/17 alone is a screen size, and "15.6" never a model.
@@ -603,4 +608,29 @@ export function sameModel(a: string, b: string): boolean {
  */
 export function searchQueryFor(key: string): string {
   return key.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Classify a listing using its description when the title was not enough.
+ *
+ * Facebook sellers routinely title a listing "Laptop Lenovo" and then spell
+ * out "ThinkPad T14 i7 16GB" in the description. Reading the description costs
+ * an extra request per listing, so callers fetch it only for listings the
+ * title failed to identify — and only then does this take it into account.
+ *
+ * The description is noisy ("no incluye cargador", "compatible con..."), so an
+ * enriched parse is accepted only when it genuinely improves on the title and
+ * does not contradict it.
+ */
+export function parseListingModel(l: { title?: string; description?: string | null }): ParsedModel {
+  const fromTitle = parseModel(String(l.title || ''));
+  if (fromTitle.confidence === 'high' || !l.description) return fromTitle;
+
+  const enriched = parseModel(`${l.title || ''} ${l.description}`);
+  const rank = { low: 0, medium: 1, high: 2 } as const;
+  if (rank[enriched.confidence] <= rank[fromTitle.confidence]) return fromTitle;
+  // The description must refine the title, not overrule it: a title that named
+  // a line keeps that line.
+  if (fromTitle.line && enriched.line !== fromTitle.line) return fromTitle;
+  return enriched;
 }
