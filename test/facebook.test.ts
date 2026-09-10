@@ -383,6 +383,94 @@ describe('search requests and parsing', () => {
   });
 });
 
+describe('search pagination', () => {
+  const PAGE_DOC_ID = '27212616558440397';
+
+  it('follows the cursor to a second page until it reaches the limit', async () => {
+    const { calls } = stubFetch((req) => {
+      if (req.docId === SEARCH_DOC_ID) {
+        const body = searchBody([1, 2, 3, 4, 5].map((i) => item({ id: String(i) })));
+        (body.data.marketplace_search.feed_units as any).page_info = {
+          has_next_page: true,
+          end_cursor: 'cursor1',
+        };
+        return json(body);
+      }
+      // Pagination operation.
+      return json(searchBody([6, 7, 8, 9, 10].map((i) => item({ id: String(i) }))));
+    });
+
+    const result = await new FacebookMarketplace().search({ ...BASE, limit: 10 });
+
+    expect(result.success).toBe(true);
+    expect(result.listings.map((l) => l.id)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']);
+    expect(result.totalFound).toBe(10);
+    expect(calls.map((c) => c.docId)).toEqual([SEARCH_DOC_ID, PAGE_DOC_ID]);
+    // Second page reuses the previous end_cursor and only requests what's left.
+    expect(calls[1].variables.cursor).toBe('cursor1');
+    expect(calls[1].variables.count).toBe(5);
+    expect(calls[1].variables.params.bqf.query).toBe('bike');
+  });
+
+  it('does not paginate when the first page has no next-page cursor', async () => {
+    const { calls } = stubFetch(() => json(searchBody([item({ id: '1' })])));
+    const result = await new FacebookMarketplace().search({ ...BASE, limit: 5 });
+    expect(result.listings.map((l) => l.id)).toEqual(['1']);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('caps the number of pages it will fetch', async () => {
+    let offset = 0;
+    const { calls } = stubFetch(() => {
+      const ids = [1, 2, 3, 4, 5].map((i) => String(offset + i));
+      offset += 5;
+      const body = searchBody(ids.map((id) => item({ id })));
+      (body.data.marketplace_search.feed_units as any).page_info = {
+        has_next_page: true,
+        end_cursor: `c${offset}`,
+      };
+      return json(body);
+    });
+
+    // Every page returns 5 fresh listings and never says there are no more.
+    const result = await new FacebookMarketplace().search({ ...BASE, limit: 500 });
+    // First page + up to MAX_PAGINATION_PAGES - 1 more pages, then it stops
+    // (MAX_PAGINATION_PAGES = 10 → 10 calls, 50 listings).
+    expect(calls.length).toBe(10);
+    expect(result.listings).toHaveLength(50);
+  });
+});
+
+describe('authenticated session', () => {
+  afterEach(() => {
+    delete process.env.FB_COOKIE;
+    delete process.env.FB_DTSG;
+    delete process.env.FB_LSD;
+    delete process.env.FB_USER;
+    delete process.env.FB_JAZOEST;
+    vi.unstubAllGlobals();
+  });
+
+  it('attaches the session cookie and RequestPayload fields when configured', async () => {
+    process.env.FB_COOKIE = 'c_user=123; xs=abcdef';
+    process.env.FB_DTSG = 'dtsgVAL';
+    process.env.FB_LSD = 'lsdVAL';
+    process.env.FB_USER = '100004461274268';
+
+    const { mock } = stubFetch(() => json(searchBody([item()])));
+    await new FacebookMarketplace().search(BASE);
+
+    const init = mock.mock.calls[0][1] as any;
+    const body = new URLSearchParams(String(init.body));
+    expect(body.get('fb_dtsg')).toBe('dtsgVAL');
+    expect(body.get('lsd')).toBe('lsdVAL');
+    expect(body.get('__user')).toBe('100004461274268');
+    expect(body.get('server_timestamps')).toBe('true');
+    expect(init.headers.cookie).toBe('c_user=123; xs=abcdef');
+    expect(String(mock.mock.calls[0][0])).toBe('https://www.facebook.com/api/graphql/');
+  });
+});
+
 describe('gated API version and the search page fallback', () => {
   const CITY_PAGE_ID = '108659242498155';
   const cityPageBody = {

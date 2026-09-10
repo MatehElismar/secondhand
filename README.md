@@ -20,6 +20,16 @@ Works with Claude Desktop, Claude Code, Cursor, and other clients that run MCP s
 | Chrome running in the background | needed | not needed |
 | Price | free, forever | free tier, then $4.99 |
 
+## Documentation
+
+Detailed reference docs live in [`docs/`](./docs):
+
+| Doc | What it covers |
+|-----|----------------|
+| [`docs/MCP.md`](./docs/MCP.md) | MCP server: connecting clients, every tool, params, JSON-RPC example, env vars |
+| [`docs/REST-API.md`](./docs/REST-API.md) | REST API: endpoints, request/response, data model, curl examples |
+| [`docs/openapi.json`](./docs/openapi.json) | Static OpenAPI 3.0 spec for the REST API (regenerate via `GET /docs/json`) |
+
 ## Supported Marketplaces
 
 | Marketplace | Auth Required | Notes |
@@ -148,7 +158,7 @@ Search for items across marketplaces.
 | `minPrice` | No | | Minimum price |
 | `limit` | No | `20` | Max results |
 | `showSold` | No | `false` | Include sold items (Facebook only) |
-| `includeImages` | No | `false` | Include image URLs in output |
+| `includeImages` | No | `false` | Accepted for compatibility — image URLs and the seller name are now always included when available |
 | `sort` | No | `relevance` | Sort order (Depop, Poshmark): `relevance`, `newest`, `most_popular`, `price_low_to_high`, `price_high_to_low` |
 | `condition` | No | | Item condition. eBay: `new`, `like_new`, `good`, `fair`. Depop: `new`, `like_new`, `excellent`, `good`, `fair`, `used`. Poshmark: `new` (NWT), `like_new` (NWOT), `good`, `fair` |
 | `category` | No | | Product category. Depop: `tops`, `bottoms`, `dresses`, `coats-jackets`, `footwear`, `accessories`, `bags`, `jewellery`, `activewear`, `swimwear`. Poshmark: `Jackets_&_Coats`, `Dresses`, `Shoes`, `Accessories`, etc. |
@@ -211,6 +221,125 @@ Useful for research-style clients that expect these standard tool names; for fil
 
 **Poshmark** — Uses a headless browser to search listings with support for condition, size, color, sort, and price filters. Poshmark is not location-based — all items ship nationally.
 
+## REST API (self-hosted)
+
+MCP is not the only interface. The repo also ships a lightweight REST API that
+sits in front of the exact same marketplace abstraction the MCP server uses — it
+never re-implements scraping or search logic.
+
+```
+REST API  ->  Marketplace abstraction  ->  Facebook / eBay / Depop / Poshmark
+MCP       ->  Marketplace abstraction  ->  Facebook / eBay / Depop / Poshmark
+```
+
+### Run it
+
+```bash
+npm install
+npm run api          # builds then starts on :3000 (see PORT below)
+```
+
+For a single local server that also wants Facebook Marketplace working, no extra
+config is needed; Facebook requires no credentials. eBay needs API keys and
+Depop/Poshmark need Chrome to be registered (see Configuration).
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/docs` | Interactive Swagger UI |
+| `GET` | `/docs/json` | Raw OpenAPI 3.0 document |
+| `GET` | `/health` | Service status + which marketplaces are registered |
+| `GET` | `/v1/locations/resolve` | Resolve a place name to coordinates |
+| `POST` | `/v1/search` | Search via a marketplace |
+| `GET` | `/v1/listings/:marketplace/:id` | Full details for one listing |
+
+> **Interactive docs**: open <http://localhost:3000/docs> for the Swagger UI. Each
+> endpoint has request/response schemas and example bodies; the raw spec (OpenAPI
+> 3.0.3) is at `GET /docs/json` if you want to generate a client or import it into
+> Postman.
+
+**`GET /v1/locations/resolve?marketplace=facebook&location=...`**
+
+```json
+{
+  "input": "Santo Domingo, Dominican Republic",
+  "name": "Ciudad",
+  "latitude": 18.4727,
+  "longitude": -69.8946
+}
+```
+
+**`POST /v1/search`**
+
+```json
+{
+  "marketplace": "facebook",
+  "query": "iphone 15",
+  "location": "Santo Domingo, Dominican Republic",
+  "radius": 25,
+  "minPrice": 300,
+  "maxPrice": 600,
+  "limit": 25
+}
+```
+
+```json
+{
+  "search": {
+    "marketplace": "facebook",
+    "query": "iphone 15",
+    "location": {
+      "input": "Santo Domingo, Dominican Republic",
+      "name": "Ciudad",
+      "latitude": 18.4727,
+      "longitude": -69.8946
+    },
+    "radiusMiles": 25,
+    "minPrice": 300,
+    "maxPrice": 600
+  },
+  "success": true,
+  "marketplace": "facebook",
+  "listings": [
+    {
+      "id": "1388212513435917",
+      "title": "Caja IPhone 15 Pro Max Titanium 512gb",
+      "price": "DOP500",
+      "priceNumeric": 500,
+      "currency": "DOP",
+      "location": "Santo Domingo, Dominican Republic",
+      "url": "https://www.facebook.com/marketplace/item/1388212513435917",
+      "images": ["..."],
+      "marketplace": "facebook",
+      "scrapedAt": "2026-09-08T16:05:15.310Z"
+    }
+  ],
+  "totalFound": 10
+}
+```
+
+The `search.location` above is the *resolved* coordinate for the search, populated
+by the marketplace's own `getLocation()` — nothing is hard-coded.
+
+**`GET /v1/listings/facebook/1589159836094134`**
+
+Returns the normalized `ListingDetails` (description, all photos, location,
+seller, delivery types).
+
+### REST API environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `3000` | Listen port |
+| `API_PORT` | — | Alias for `PORT` |
+| `HOST` | `0.0.0.0` | Bind address |
+| `LOG_LEVEL` | `info` | Fastify log level |
+
+Tip: the lookup and search endpoints accept the same filter fields the MCP
+`search_marketplace` tool does (`minPrice`, `maxPrice`, `condition`, `sort`,
+`category`, `brand`, `department`, `sizes`, `colors`, `showSold`, `offset`).
+
 ## Development
 
 ```bash
@@ -219,6 +348,91 @@ cd secondhand-mcp
 npm install
 npm run build
 ```
+
+| Command | What it does |
+|---------|--------------|
+| `npm run build` | Compile TypeScript to `dist/` |
+| `npm test` | Run the Vitest suite |
+| `npm run dev` | Run the MCP server from source (ts-node; see note below) |
+| `npm start` | Run the MCP server from `dist/` |
+| `npm run api` | Build then start the REST API on `:3000` (loads `.env` if present) |
+| `npm run fb:session` | One-time Facebook login flow → writes `FB_*` into `.env` |
+
+> **Note on `npm run dev` / ts-node** — the source uses NodeNext ESM with `*.js`
+> import specifiers, which the bundled `ts-node` version cannot resolve under
+> recent Node builds. If `npm run dev` reports `ERR_MODULE_NOT_FOUND`, use
+> `npm run build && npm start` (MCP) or `npm run api` (REST) instead. Both compile
+> with `tsc` and run against `dist/`.
+
+### Configuring via a `.env` file
+
+The REST API reads `process.env`. On Node ≥ 22.9 you can load a `.env` file
+without any dependency:
+
+```bash
+node --env-file=.env dist/api.js
+```
+
+`npm run api` already loads `.env` automatically
+(`node --env-file-if-exists=.env dist/api.js`). A commented `/ .env.example`
+lists every supported variable.
+
+### Facebook session (optional, unlocks the real feed + pagination)
+
+Facebook returns a gated/empty search feed to unauthenticated callers, so the
+server falls back to a single logged-out HTML page (~24 results). Providing a
+logged-in session makes the GraphQL feed come back real, and keyword searches
+then **paginate** past 24 items.
+
+Log in **once** to capture it automatically:
+
+```bash
+npm run fb:session
+```
+
+This opens a dedicated Chrome window; complete the login there and the script
+writes `FB_COOKIE`, `FB_DTSG`, `FB_LSD`, `FB_USER`, `FB_JAZOEST` into `.env`.
+It reads the session cookies (including the HttpOnly ones) via `page.cookies()`
+plus `fb_dtsg`/`lsd` from a `/api/graphql` request, and keeps a persistent
+profile in `.fb-session/` (gitignored) so you don't log in again.
+
+Keep `.env` and `.fb-session/` private — they contain your live session. See
+[`docs/MCP.md`](./docs/MCP.md) and [`docs/REST-API.md`](./docs/REST-API.md) for
+the env vars and the pagination/gating behavior. Note this is unofficial
+scraping of Facebook's internal GraphQL; use at your own account risk.
+
+To get the **MCP** server (e.g. opencode) to use the same session, register it
+with `--env-file-if-exists=<repo>/.env` in its launch command — the live session
+then loads from `.env` without duplicating secrets. Full steps in
+[`docs/MCP.md`](./docs/MCP.md)
+
+## Docker
+
+A multi-stage `Dockerfile` and `docker-compose.yml` are provided to run the REST
+API as a self-hosted service. Facebook and eBay work out of the box; to also
+enable Depop and Poshmark, install Chromium (`INSTALL_CHROME=true`).
+
+```bash
+cp .env.example .env     # optional: add eBay keys / SMARTPROXY_URL
+docker compose up -d
+```
+
+The container:
+
+* runs `node dist/api.js` (the REST API) on port 3000,
+* binds `HOST=0.0.0.0`,
+* has a `/health` Docker healthcheck,
+* reads secrets from the GitHub-ignored `.env` file (or `docker compose` env).
+
+To enable the browser marketplaces from the command line:
+
+```bash
+docker compose build --build-arg INSTALL_CHROME=true
+docker compose up -d
+```
+
+> Note: the MCP stdio server (`npx secondhand-mcp` / `node dist/index.js`) is meant
+> to run on the host and talk over stdio, so it is not what the container starts.
 
 ### Adding a Marketplace
 

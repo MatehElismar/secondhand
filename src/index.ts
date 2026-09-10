@@ -120,7 +120,7 @@ const tools: AnnotatedTool[] = [
         },
         includeImages: {
           type: 'boolean',
-          description: 'Include full image URLs in results (default: false). Use get_listing_details for full photos.',
+          description: 'Accepted for compatibility. Image URLs are now always included in results, with the seller name when Facebook provides it. Use get_listing_details for the full photo set.',
           default: false
         },
         sort: {
@@ -681,13 +681,12 @@ function formatSingleResult(result: SearchResult, params: SearchParams, includeI
     if (listing.location) {
       lines.push(`   📍 ${listing.location}`);
     }
+    if (listing.seller) {
+      lines.push(`   👤 Seller: ${listing.seller}`);
+    }
     lines.push(`   🆔 ${listing.id}`);
     if (listing.images && listing.images.length > 0) {
-      if (includeImages) {
-        lines.push(`   🖼️ Images: ${listing.images.join(' , ')}`);
-      } else {
-        lines.push(`   📷 ${listing.images.length} photo${listing.images.length > 1 ? 's' : ''}`);
-      }
+      lines.push(`   🖼️ Images: ${listing.images.join(' , ')}`);
     }
     lines.push('');
   }
@@ -718,12 +717,14 @@ function formatMultipleResults(results: SearchResult[], params: SearchParams, in
 
       for (const listing of sorted) {
         lines.push(`  • **${listing.price}** - ${listing.title}`);
+        if (listing.location) {
+          lines.push(`    📍 ${listing.location}`);
+        }
+        if (listing.seller) {
+          lines.push(`    👤 Seller: ${listing.seller}`);
+        }
         if (listing.images && listing.images.length > 0) {
-          if (includeImages) {
-            lines.push(`    🖼️ Images: ${listing.images.join(' , ')}`);
-          } else {
-            lines.push(`    📷 ${listing.images.length} photo${listing.images.length > 1 ? 's' : ''}`);
-          }
+          lines.push(`    🖼️ Images: ${listing.images.join(' , ')}`);
         }
         lines.push(`    🆔 ${listing.id}`);
       }

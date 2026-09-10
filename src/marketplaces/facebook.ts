@@ -22,6 +22,7 @@ import { SearchParams, SearchResult, Listing, ListingDetails, LocationCoordinate
 const GRAPHQL_URL = 'https://www.facebook.com/api/graphql/';
 const LOCATION_DOC_ID = '5585904654783609';
 const SEARCH_DOC_ID = '27517490627932547';
+const SEARCH_PAGE_DOC_ID = '27212616558440397';
 const DETAIL_PHOTOS_DOC_ID = '10059604367394414';
 const DETAIL_INFO_DOC_ID = '26090240497332612';
 
@@ -38,6 +39,10 @@ const MAX_RADIUS_MILES = 500;
 const KM_PER_MILE = 1.609;
 const API_PAGE_SIZE = 24;
 const MIN_TRUSTED_LISTINGS = 5;
+// Facebook serves search results in 24-item pages; the client fetches the next
+// page through a second, cursor-based operation (SEARCH_PAGE_DOC_ID).
+// 10 pages ≈ up to ~240 items; higher cost (more requests, faster rate-limit).
+const MAX_PAGINATION_PAGES = 10;
 
 const GRAPHQL_HEADERS: Record<string, string> = {
   'content-type': 'application/x-www-form-urlencoded',
@@ -67,10 +72,35 @@ const proxyAgent = process.env.SMARTPROXY_URL
   ? new ProxyAgent(process.env.SMARTPROXY_URL)
   : undefined;
 
+// Facebook's search GraphQL returns a gated/empty feed to callers without a
+// session. Providing a logged-in session (cookie header + the RequestPayload
+// fields it ships) makes it return the real feed, which is what enables cursor
+// pagination. All optional — absent means the unauthenticated (gated) path,
+// which falls back to the logged-out HTML search page.
+
+interface FbAuth {
+  cookie?: string;
+  dtsg?: string;
+  lsd?: string;
+  user?: string;
+  jazoest?: string;
+}
+
+function buildFbAuth(): FbAuth | null {
+  const cookie = process.env.FB_COOKIE;
+  const dtsg = process.env.FB_DTSG;
+  const lsd = process.env.FB_LSD;
+  const user = process.env.FB_USER;
+  const jazoest = process.env.FB_JAZOEST;
+  if (!cookie && !dtsg && !lsd) return null;
+  return { cookie, dtsg, lsd, user, jazoest };
+}
+
 interface FeedUnitsReading {
   listings: Listing[];
   malformed: boolean;
   hasNextPage: boolean;
+  endCursor?: string;
 }
 
 export class FacebookMarketplace extends BaseMarketplace {
@@ -118,6 +148,10 @@ export class FacebookMarketplace extends BaseMarketplace {
             'Unexpected response structure from Facebook, and the search page could not be read either. The GraphQL doc_id may need updating.'
           );
         }
+      } else {
+        result = await this.paginateSearch(
+          query, coords, limit, minPrice, maxPrice, radiusMiles, showSold, graph
+        );
       }
 
       result ??= {
@@ -211,6 +245,7 @@ export class FacebookMarketplace extends BaseMarketplace {
       listings: this.parseListings(edges, limit, showSold),
       malformed: edges.some((edge) => edge?.node && !edge.node.listing),
       hasNextPage: feedUnits.page_info?.has_next_page === true,
+      endCursor: feedUnits.page_info?.end_cursor,
     };
   }
 
@@ -242,37 +277,7 @@ export class FacebookMarketplace extends BaseMarketplace {
       contextual_data: null,
       count: Math.min(limit, API_PAGE_SIZE),
       cursor: null,
-      params: {
-        bqf: {
-          callsite: 'COMMERCE_MKTPLACE_WWW',
-          query,
-        },
-        browse_request_params: {
-          commerce_enable_local_pickup: true,
-          commerce_enable_shipping: true,
-          commerce_search_and_rp_available: true,
-          commerce_search_and_rp_category_id: [],
-          commerce_search_and_rp_condition: null,
-          commerce_search_and_rp_ctime_days: null,
-          filter_location_latitude: coords.latitude,
-          filter_location_longitude: coords.longitude,
-          filter_price_lower_bound: minPrice ?? 0,
-          filter_price_upper_bound: maxPrice ?? MAX_PRICE_SENTINEL,
-          filter_radius_km: Math.round(radiusMiles * KM_PER_MILE),
-        },
-        custom_request_params: {
-          browse_context: null,
-          contextual_filters: [],
-          referral_code: null,
-          referral_ui_component: null,
-          saved_search_strid: null,
-          search_vertical: 'C2C',
-          seo_url: null,
-          serp_landing_settings: { virtual_category_id: '' },
-          surface: 'SEARCH',
-          virtual_contextual_filters: [],
-        },
-      },
+      params: this.searchParams(query, coords, minPrice, maxPrice, radiusMiles),
       savedSearchID: null,
       savedSearchQuery: query,
       scale: 2,
@@ -281,6 +286,121 @@ export class FacebookMarketplace extends BaseMarketplace {
       topicPageParams: { location_id: null, url: null },
       __relay_internal__pv__GHLShouldChangeMarketplaceSponsoredDataFieldNamerelayprovider: true,
     });
+  }
+
+  // The next-page operation (SEARCH_PAGE_DOC_ID) drops the top-level
+  // buyLocation / savedSearch* / topicPageParams fields and instead takes the
+  // opaque `cursor` returned by the preceding feed's page_info.end_cursor.
+  private paginationVariables(
+    query: string,
+    coords: LocationCoordinates,
+    limit: number,
+    minPrice?: number,
+    maxPrice?: number,
+    radiusMiles: number = DEFAULT_RADIUS_MILES,
+    cursor?: string
+  ): string {
+    return JSON.stringify({
+      count: Math.min(limit, API_PAGE_SIZE),
+      cursor: cursor ?? null,
+      params: this.searchParams(query, coords, minPrice, maxPrice, radiusMiles),
+      scale: 2,
+      __relay_internal__pv__GHLShouldChangeMarketplaceSponsoredDataFieldNamerelayprovider: true,
+    });
+  }
+
+  private searchParams(
+    query: string,
+    coords: LocationCoordinates,
+    minPrice?: number,
+    maxPrice?: number,
+    radiusMiles: number = DEFAULT_RADIUS_MILES
+  ) {
+    return {
+      bqf: {
+        callsite: 'COMMERCE_MKTPLACE_WWW',
+        query,
+      },
+      browse_request_params: {
+        commerce_enable_local_pickup: true,
+        commerce_enable_shipping: true,
+        commerce_search_and_rp_available: true,
+        commerce_search_and_rp_category_id: [],
+        commerce_search_and_rp_condition: null,
+        commerce_search_and_rp_ctime_days: null,
+        filter_location_latitude: coords.latitude,
+        filter_location_longitude: coords.longitude,
+        filter_price_lower_bound: minPrice ?? 0,
+        filter_price_upper_bound: maxPrice ?? MAX_PRICE_SENTINEL,
+        filter_radius_km: Math.round(radiusMiles * KM_PER_MILE),
+      },
+      custom_request_params: {
+        browse_context: null,
+        contextual_filters: [],
+        referral_code: null,
+        referral_ui_component: null,
+        saved_search_strid: null,
+        search_vertical: 'C2C',
+        seo_url: null,
+        serp_landing_settings: { virtual_category_id: '' },
+        surface: 'SEARCH',
+        virtual_contextual_filters: [],
+      },
+    };
+  }
+
+  /**
+   * Follow the cursor-based pagination (SEARCH_PAGE_DOC_ID) when the first
+   * page is a real feed (not gated) and the caller asked for more than it
+   * returned. Dedupes by id (ads/boosts repeat across slices) and caps the
+   * work at MAX_PAGINATION_PAGES.
+   */
+  private async paginateSearch(
+    query: string,
+    coords: LocationCoordinates,
+    limit: number,
+    minPrice: number | undefined,
+    maxPrice: number | undefined,
+    radiusMiles: number,
+    showSold: boolean,
+    first: FeedUnitsReading
+  ): Promise<SearchResult> {
+    const listings: Listing[] = first.listings;
+    const seen = new Set(listings.map((l) => l.id));
+    let { endCursor, hasNextPage } = first;
+    let pages = 1;
+    const maxPages = MAX_PAGINATION_PAGES;
+
+    while (listings.length < limit && hasNextPage && endCursor && pages < maxPages) {
+      pages++;
+      const remaining = limit - listings.length;
+      let next: FeedUnitsReading;
+      try {
+        const response = await this.fetchGraphQL(
+          SEARCH_PAGE_DOC_ID,
+          this.paginationVariables(query, coords, remaining, minPrice, maxPrice, radiusMiles, endCursor)
+        );
+        next = this.readFeedUnits(response.data?.marketplace_search?.feed_units, remaining, showSold);
+      } catch {
+        // A gated/error next page should not nuke the results already gathered.
+        break;
+      }
+      for (const l of next.listings) {
+        if (seen.has(l.id)) continue;
+        seen.add(l.id);
+        listings.push(l);
+        if (listings.length >= limit) break;
+      }
+      endCursor = next.endCursor;
+      hasNextPage = next.hasNextPage;
+    }
+
+    return {
+      marketplace: this.name,
+      success: true,
+      listings,
+      totalFound: listings.length,
+    };
   }
 
   private async searchViaPage(
@@ -550,6 +670,20 @@ export class FacebookMarketplace extends BaseMarketplace {
       doc_id: docId,
     });
 
+    // Authenticated sessions carry these as form fields (not just as cookies).
+    const auth = buildFbAuth();
+    if (auth) {
+      if (auth.dtsg) body.set('fb_dtsg', auth.dtsg);
+      if (auth.lsd) body.set('lsd', auth.lsd);
+      if (auth.user) body.set('__user', auth.user);
+      if (auth.jazoest) body.set('jazoest', auth.jazoest);
+      body.set('server_timestamps', 'true');
+      body.set('fb_api_caller_class', 'RelayModern');
+    }
+
+    const headers: Record<string, string> = { ...GRAPHQL_HEADERS };
+    if (auth?.cookie) headers.cookie = auth.cookie;
+
     const deadline = Date.now() + TOTAL_BUDGET_MS;
     let lastError: Error | undefined;
 
@@ -558,7 +692,7 @@ export class FacebookMarketplace extends BaseMarketplace {
       let expiry: ReturnType<typeof setTimeout> | undefined;
 
       try {
-        const running = this.attemptGraphQL(body, Math.min(ATTEMPT_TIMEOUT_MS, remaining));
+        const running = this.attemptGraphQL(body, Math.min(ATTEMPT_TIMEOUT_MS, remaining), headers);
         // A transport that is slow to honour its abort would otherwise carry an
         // attempt past the deadline; losing this race is what caps elapsed time.
         running.catch(() => {});
@@ -590,10 +724,10 @@ export class FacebookMarketplace extends BaseMarketplace {
     throw lastError ?? new Error('Facebook request failed');
   }
 
-  private async attemptGraphQL(body: URLSearchParams, timeoutMs: number): Promise<any> {
+  private async attemptGraphQL(body: URLSearchParams, timeoutMs: number, headers: Record<string, string> = GRAPHQL_HEADERS): Promise<any> {
     const response = await fetch(GRAPHQL_URL, {
       method: 'POST',
-      headers: GRAPHQL_HEADERS,
+      headers,
       body: body.toString(),
       signal: AbortSignal.timeout(timeoutMs),
       // @ts-ignore — dispatcher is a Node.js/undici-specific fetch option
@@ -609,9 +743,10 @@ export class FacebookMarketplace extends BaseMarketplace {
       });
     }
 
-    const json = (await response.json()) as any;
+    const text = await response.text();
+    const json = parseGraphQLResponse(text);
 
-    if (json.errors?.length) {
+    if (json?.errors?.length) {
       throw Object.assign(new Error(`Facebook GraphQL error: ${json.errors[0].message}`), {
         fatal: true,
       });
@@ -619,6 +754,46 @@ export class FacebookMarketplace extends BaseMarketplace {
 
     return json;
   }
+}
+
+/**
+ * Facebook sometimes serves a GraphQL reply as text/html (or as a JSON object
+ * with trailing content / an HTML wrapper). Parse a JSON object prefix when the
+ * body begins with '{'; otherwise it is an HTML error/login page, which is a
+ * soft (retryable) failure so callers can fall back or stop paginating.
+ */
+function parseGraphQLResponse(text: string): any {
+  const trimmed = text.trimStart();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    if (trimmed.startsWith('{')) {
+      const obj = extractJsonObject(trimmed);
+      if (obj) return JSON.parse(obj);
+    }
+  }
+  throw Object.assign(new Error('Facebook GraphQL returned a non-JSON response'), { fatal: false });
+}
+
+// Balanced-brace scan (string-aware) from the first '{' to its matching '}'.
+function extractJsonObject(text: string): string | null {
+  let depth = 0;
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (c === '\\') i++;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') inString = true;
+    else if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return text.slice(0, i + 1);
+    }
+  }
+  return null;
 }
 
 function clampRadius(radiusMiles: number | undefined): number {
