@@ -259,6 +259,28 @@ describe('POST /v1/search', () => {
     // eBay has no location support, so location stays a plain input echo.
     expect(res.json().search.location).toBeUndefined();
   });
+
+  it('attaches a fuzzy modelGroup key shared by low-confidence twins', async () => {
+    h.list = [
+      listing({ id: 'a', title: 'Wooden Vintage Chair', priceNumeric: 100 }),
+      listing({ id: 'b', title: 'Vintage Wooden Chair', priceNumeric: 120 }),
+      listing({ id: 'c', title: 'Apple iPhone 15 Pro 256GB', priceNumeric: 700 }),
+    ];
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/search',
+      payload: { marketplace: 'facebook', query: 'chair' },
+    });
+    expect(res.statusCode).toBe(200);
+    const byId = Object.fromEntries(res.json().listings.map((l: any) => [l.id, l]));
+    // Word-reordered low keys land in the same group (canonical wins by
+    // lexicographic tie-break here), while the high key never remaps.
+    expect(byId.a.model).toBe('Wooden Vintage Chair');
+    expect(byId.a.modelGroup).toBe('Vintage Wooden Chair');
+    expect(byId.b.modelGroup).toBe('Vintage Wooden Chair');
+    expect(byId.c.modelGroup).toBe('iPhone 15 Pro 256GB');
+    expect(byId.c.modelGroup).toBe(byId.c.model);
+  });
 });
 
 describe('POST /v1/arbitrage', () => {

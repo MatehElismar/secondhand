@@ -31,7 +31,10 @@ const median = (arr) => {
 // already drifted, so this table and the arbitrage disagreed on what a model
 // even was — the same MacBook showed as "MacBook AIR 8GB" here and
 // "MacBook Air M2 256GB" there.
-const modelOf = (l) => l.model || 'Otro';
+// The server computes the fuzzy merge of low-confidence models and sends it
+// as `modelGroup`; the browser must never re-implement grouping, only consume
+// what the API already decided. Fall back to `model` for older API responses.
+const modelOf = (l) => l.modelGroup || l.model || 'Otro';
 
 function computeStats(listings) {
   const groups = new Map();

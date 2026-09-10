@@ -181,6 +181,15 @@ export function parseStorage(title: string): { storageGb: number | null; multiSt
 
 const titleCase = (w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
 
+/**
+ * Words that carry no model information — condition, provenance and Spanish
+ * connectives. They show up in every other title ("New iPhone …", "iPhone
+ * para piezas"), so anything deriving meaning from a title's words has to drop
+ * them first. Shared with the fuzzy grouper so both filters stay identical.
+ */
+export const FILLER_WORDS_RE =
+  /^(new|nuevo|nueva|used|usado|usada|oem|original|genuine|sealed|sellado|sellada|unlocked|factory|vendo|venta|vende|cambio|oferta|the|de|para|con|en|y)$/i;
+
 function parseChip(t: string): string | null {
   const m = t.match(/\bm([1-9])\s*(pro|max|ultra)?\b/i);
   if (!m) return null;
@@ -331,7 +340,7 @@ export function parseModel(title: string): ParsedModel {
     .replace(/[^\p{L}\p{N} ]/gu, ' ')
     .split(/\s+/)
     .filter(Boolean)
-    .filter((w) => !/^(new|nuevo|nueva|used|usado|usada|oem|original|genuine|sealed|sellado|sellada|unlocked|factory|vendo|venta|vende|cambio|oferta|the|de|para|con|en|y)$/i.test(w));
+    .filter((w) => !FILLER_WORDS_RE.test(w));
   return finish({
     ...base,
     generation: null,

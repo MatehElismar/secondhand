@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bucketize, filterBuyable, modelKey, sameModel } from '../src/arbitrage.js';
+import { bucketize, filterBuyable, groupStats, modelKey, sameModel } from '../src/arbitrage.js';
 
 const price = (l: { priceNumeric: number }) => l.priceNumeric;
 
@@ -193,5 +193,50 @@ describe('sameModel', () => {
     ];
     for (const t of strays) expect(sameModel(modelKey(t), key)).toBe(false);
     expect(sameModel(modelKey('Apple iPhone 15 Pro 256GB Unlocked Very Good'), key)).toBe(true);
+  });
+});
+
+describe('groupStats (fuzzy low-confidence merge)', () => {
+  const u = (title: string, priceNumeric: number) => ({ title, priceNumeric, currency: 'USD' }) as any;
+
+  it('merges low-confidence groups that differ only in word order', () => {
+    const stats = groupStats([
+      u('Wooden Vintage Chair', 100), // unrecognized -> low key "Wooden Vintage Chair"
+      u('Wooden Vintage Chair', 120),
+      u('Vintage Wooden Chair', 80), // same words, different order
+      u('Walnut Dining Table', 300), // unrelated: 0 token overlap
+    ]);
+    expect(stats).toHaveLength(2);
+    const merged = stats.find((s) => s.count === 3)!;
+    expect(merged.confidence).toBe('low');
+    expect(merged.key).toBe('Wooden Vintage Chair'); // most frequent phrasing wins
+    expect(merged.median).toBe(100); // median of 100, 120, 80
+    expect(stats.find((s) => s.count === 1)!.key).toBe('Walnut Dining Table');
+  });
+
+  it('merges low groups that differ by a colour descriptor', () => {
+    const stats = groupStats([
+      u('Vintage Chair Black', 90),
+      u('Vintage Chair', 110),
+      u('Walnut Table', 300),
+    ]);
+    const merged = stats.find((s) => s.count === 2)!;
+    expect(merged).toBeDefined();
+    expect(merged.confidence).toBe('low');
+    expect(stats.find((s) => s.key === 'Walnut Table')).toBeDefined();
+  });
+
+  it('never merges high-confidence groups even when fuzzy-similar', () => {
+    // "iPhone 15 Pro 256GB" and "iPhone 15 Pro 512GB" are the same product
+    // (similarity 1.0 after normalization) but different structural keys, and
+    // "Pro Max" is a different machine — a blanket merge would collapse all
+    // three into one price range.
+    const stats = groupStats([
+      u('Apple iPhone 15 Pro 256GB Unlocked', 700),
+      u('Apple iPhone 15 Pro 512GB', 750),
+      u('Apple iPhone 15 Pro Max 256GB', 900),
+    ]);
+    expect(stats).toHaveLength(3);
+    expect(stats.every((s) => s.confidence === 'high')).toBe(true);
   });
 });
