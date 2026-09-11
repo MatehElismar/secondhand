@@ -47,10 +47,14 @@
             <label>Formato (eBay)
               <select name="buyingFormat" id="buyingFormat">
                 <option value="fixed" selected>Comprar ya</option>
-                <option value="auction60">Subastas por cerrar (≤1h)</option>
-                <option value="auction">Todas las subastas</option>
+                <option value="auction">Solo subastas</option>
                 <option value="any">Todos</option>
               </select>
+            </label>
+            <label id="endingWithinWrap" hidden>Subastas que cierran en
+              <!-- Options come from SecondhandParams.AUCTION_WINDOWS in app.js, so the
+                   ladder lives in exactly one place: public/params.js. -->
+              <select name="endingWithin" id="endingWithin"></select>
             </label>
           </div>
           <div class="row">
@@ -79,7 +83,7 @@
           <div class="arb-legend-body">
             <dl>
               <dt>Compras</dt>
-              <dd>Mediana de precio en el mercado secundario (<b>eBay</b>) — lo que te cuesta conseguir la unidad.</dd>
+              <dd>Mediana de precio en el mercado secundario (<b>eBay</b>) — lo que te cuesta conseguir la unidad comprando directo (<b>Buy It Now</b>). No depende del formato que elijas en la búsqueda: una puja viva sube, así que no sirve como precio.</dd>
               <dt>Vendes</dt>
               <dd>Mediana en el mercado que buscaste (<b>Facebook</b>) — lo que la gente pide localmente.</dd>
               <dt>Ganancia neta</dt>
@@ -122,6 +126,7 @@
       </section>
     </main>
 
+    <script src="./params.js"></script>
     <script src="./fx.js"></script>
     <script src="./app.js"></script>
   </body>

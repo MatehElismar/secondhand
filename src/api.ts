@@ -317,8 +317,13 @@ export async function buildApiServer(): Promise<FastifyInstance> {
             endingWithinMinutes: {
               type: 'number',
               minimum: 1,
+              // Past a day a live bid stops approximating the final price, so a wider
+              // window is not "closing soon" any more: it just biases the number
+              // downward. Out-of-range input is refused, never silently clamped, so the
+              // response always corresponds to what was asked for.
+              maximum: 1440,
               description:
-                'With buyingFormat=auction: only bids closing within this many minutes. Near close the current bid approximates the final price.',
+                'With buyingFormat=auction: only bids closing within this many minutes, at most 1440 (24 hours). Near close the current bid approximates the final price; a day out it does not. Ignored for every other format.',
             },
             sort: { type: 'string', description: 'Sort order (Depop, Poshmark)' },
             condition: { type: 'string' },
@@ -523,8 +528,14 @@ export async function buildApiServer(): Promise<FastifyInstance> {
             endingWithinMinutes: {
               type: 'number',
               minimum: 1,
+              // Ceiling mirrors /v1/search. Note what this parameter does NOT do here: the
+              // buy-side median this endpoint reports comes from `buyingFormat`, whose
+              // default is 'fixed'. Sending 'auction' together with a narrow window prices
+              // that median off live bids, which only go up, and shrinks its sample to a
+              // couple of units. Omit both fields for a comparison you can act on.
+              maximum: 1440,
               description:
-                'With buyingFormat=auction: only bids closing within this many minutes. Near close the current bid approximates the final price.',
+                'With buyingFormat=auction: only bids closing within this many minutes, at most 1440 (24 hours). Ignored for every other format. A live bid sits below the price the item will reach, so a narrow window both shrinks the buy-side sample and biases its median downward.',
             },
             enrichDescriptions: {
               type: 'boolean',

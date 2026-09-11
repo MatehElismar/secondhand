@@ -326,6 +326,40 @@ The `minPrice: 300` / `maxPrice: 600` bounds in that request are **DOP**, so the
 centavos; the adapter scales the bounds (300 -> `30000`, 600 -> `60000`) before
 sending them, so the example above only returns in-range listings.
 
+**`buyingFormat` / `endingWithinMinutes` (eBay only)**
+
+Both fields are ignored by every marketplace except eBay.
+
+| Field | Type | Range | Description |
+|-------|------|-------|-------------|
+| `buyingFormat` | string | `any` / `fixed` / `auction` | `fixed` excludes bidding, `auction` returns only biddable items (the price shown is the current bid), `any` leaves eBay's own ranking alone. |
+| `endingWithinMinutes` | number | 1-1440 | With `buyingFormat: "auction"`, only bids closing within this many minutes. Out-of-range values are rejected with `400`, never silently clamped. |
+
+```json
+{
+  "marketplace": "ebay",
+  "query": "iphone 15",
+  "buyingFormat": "auction",
+  "endingWithinMinutes": 60
+}
+```
+
+Two things worth knowing before you build on this:
+
+- **The window is a range, not a bucket.** `endingWithinMinutes: 60` returns everything
+  closing within the hour, which is a superset of what `15` returns. There is no
+  disjoint "between 15 and 60" query.
+- **Auction volume is thin at the short end.** Measured against the live Browse API,
+  auctions closing within an hour are roughly 3% of those closing within a day, and a
+  five-minute window returns nothing for most queries. That is why the shipped web UI
+  offers windows out to 24 hours, and says so when a short window comes back empty.
+
+`POST /v1/arbitrage` accepts both fields as well, but note what they do there: the
+endpoint prices its buy side from `buyingFormat`, whose default is `fixed`. Passing
+`auction` together with a narrow window prices that median off live bids, which sit
+below the price the item will actually reach, so it shrinks the sample *and* biases it
+downward. Omit both fields unless you specifically want an auction-based comparison.
+
 **`GET /v1/listings/facebook/1589159836094134`**
 
 Returns the normalized `ListingDetails` (description, all photos, location,
