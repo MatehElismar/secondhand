@@ -79,7 +79,9 @@ function renderStats(listings) {
   $('#statsPending').hidden = true;
   $('#stats').hidden = stats.length === 0;
   $('#statsEmpty').hidden = stats.length > 0;
-  const fmt = (n) => (n == null ? '—' : '$' + Math.round(n).toLocaleString('en-US'));
+  // Pesos: every figure in this table comes from SecondhandFX.toDOP, so the symbol
+  // has to say so. A bare "$" on a peso median reads as dollars.
+  const fmt = (n) => (n == null ? '—' : SecondhandMoney.DOP.format(n));
   for (const s of stats) {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${escape(s.key)}</td><td>${s.count}</td><td>${fmt(s.avg)}</td><td>${fmt(s.median)}</td><td>${fmt(s.min)}</td><td>${fmt(s.max)}</td>`;
@@ -376,8 +378,9 @@ async function runArbitrage(e) {
 let lastArb = null;
 let onlyProfitable = false;
 
-const usd = (n) =>
-  n == null ? '—' : (n < 0 ? '−$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
+// Dollars: the arbitrage panel normalizes to USD (see the legend in index.html), so it
+// says US$ rather than a bare "$" that would read the same as the peso table above.
+const usd = (n) => (n == null ? '—' : SecondhandMoney.USD.format(n));
 
 /** Net margin, or null when the buy side has no median to net against. */
 function effNet(s) {
