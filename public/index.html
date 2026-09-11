@@ -23,11 +23,16 @@
             <label>Producto
               <input name="query" id="query" placeholder="iphone 15 128" value="iphone 15" required />
             </label>
-            <label>Ubicación
-              <input name="location" id="location" placeholder="Santo Domingo, Dominican Republic" value="Santo Domingo, Dominican Republic" />
+            <label>Provincia
+              <!-- Options come from GET /v1/locations/places, so the picker and the
+                   server-side resolver share one list and cannot drift apart. -->
+              <select name="province" id="province"></select>
             </label>
-            <label>Radio (mi)
-              <input name="radius" id="radius" type="number" value="25" min="1" max="500" />
+            <label>Municipio
+              <select name="municipality" id="municipality"></select>
+            </label>
+            <label>Radio (km)
+              <input name="radius" id="radius" type="number" value="40" min="1" max="200" />
             </label>
             <label>Min precio
               <input name="minPrice" id="minPrice" type="number" min="0" />
@@ -59,7 +64,6 @@
           </div>
           <div class="row">
             <button type="submit" id="go">Buscar</button>
-            <button type="button" id="resolveLoc" class="ghost">Resolver ubicación</button>
             <button type="button" id="goArb" class="ghost">Arbitraje (cross-market) ↗</button>
             <span id="coords" class="coords"></span>
           </div>

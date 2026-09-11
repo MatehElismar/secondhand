@@ -105,19 +105,71 @@ async function init() {
   }
 }
 
-async function fillCoords() {
-  const location = $('#location').value.trim();
-  if (!location) return;
+/**
+ * The places this app can search, as served by GET /v1/locations/places.
+ *
+ * The browser keeps no list of its own: the server's closed table is the single source
+ * of truth, so the picker cannot offer a place the resolver does not know. That is the
+ * bug this replaces — a free-text field whose value was ranked by Facebook's own place
+ * search, which answered "Santo Domingo, Dominican Republic" with a city in Paraguay.
+ */
+let placeGroups = [];
+
+async function loadPlaces() {
+  const province = $('#province');
+  const municipality = $('#municipality');
+
   try {
-    const j = await (await fetch('/v1/locations/resolve?marketplace=facebook&location=' + encodeURIComponent(location))).json();
-    if (j && typeof j.latitude === 'number') {
-      $('#coords').textContent = `✓ ${j.name ?? ''} ${j.latitude.toFixed(4)}, ${j.longitude.toFixed(4)}`;
-    } else {
-      $('#coords').textContent = 'No se pudo resolver';
-    }
+    const j = await (await fetch('/v1/locations/places')).json();
+    placeGroups = Array.isArray(j.groups) ? j.groups : [];
   } catch {
-    $('#coords').textContent = 'Error al resolver';
+    placeGroups = [];
   }
+
+  province.innerHTML = '';
+  for (const group of placeGroups) {
+    const option = document.createElement('option');
+    option.value = group.id;
+    option.textContent = group.label;
+    province.appendChild(option);
+  }
+
+  if (!placeGroups.length) {
+    municipality.innerHTML = '';
+    $('#coords').textContent = 'No se pudieron cargar las ubicaciones';
+    return;
+  }
+  syncMunicipalities();
+}
+
+function placesOf(groupId) {
+  const group = placeGroups.find((g) => g.id === groupId);
+  return group ? group.places : [];
+}
+
+/** Rebuild the municipality list for whichever province is selected. */
+function syncMunicipalities() {
+  const municipality = $('#municipality');
+  municipality.innerHTML = '';
+  for (const place of placesOf($('#province').value)) {
+    const option = document.createElement('option');
+    option.value = place.name;
+    option.textContent = place.label;
+    municipality.appendChild(option);
+  }
+  showSelection();
+}
+
+/**
+ * Name the selected place and show its coordinates. The picker already makes a wrong
+ * city impossible, but the coordinates are the number the search is really built on,
+ * so they are worth stating rather than hiding behind a 12px grey hint.
+ */
+function showSelection() {
+  const place = placesOf($('#province').value).find((p) => p.name === $('#municipality').value);
+  $('#coords').textContent = place
+    ? `✓ ${place.label} · ${place.latitude.toFixed(4)}, ${place.longitude.toFixed(4)}`
+    : '';
 }
 
 /** Show the closing-window select only when the format can actually use it. */
@@ -170,8 +222,12 @@ async function runSearch(e) {
   const body = SecondhandParams.searchBody({
     marketplace: $('#marketplace').value,
     query: $('#query').value,
-    location: $('#location').value,
-    radius: $('#radius').value,
+    // The municipality picker, not a text field: a free-text place name was ranked by
+    // Facebook's own search and answered with a city in Paraguay.
+    location: $('#municipality').value,
+    // Kilometres, because the market is Dominican; the API converts to the miles its
+    // SearchParams still carries.
+    radiusKm: $('#radius').value,
     minPrice: $('#minPrice').value,
     maxPrice: $('#maxPrice').value,
     limit: $('#limit').value,
@@ -291,8 +347,8 @@ async function runArbitrage(e) {
   const body = SecondhandParams.arbitrageBody({
     marketplace: $('#marketplace').value,
     query: $('#query').value,
-    location: $('#location').value,
-    radius: $('#radius').value,
+    location: $('#municipality').value,
+    radiusKm: $('#radius').value,
     minPrice: $('#minPrice').value,
     maxPrice: $('#maxPrice').value,
     limit: $('#limit').value,
@@ -603,11 +659,15 @@ function renderArbitrage(data) {
 
 document.addEventListener('DOMContentLoaded', () => {
   init();
+  // Both sets belong: the closing-window ladder and the place picker are independent
+  // controls, and each has to be built before it can be read.
+  loadPlaces();
+  $('#province').addEventListener('change', syncMunicipalities);
+  $('#municipality').addEventListener('change', showSelection);
   fillAuctionWindows();
   syncWindowVisibility();
   $('#buyingFormat').addEventListener('change', syncWindowVisibility);
   $('#searchForm').addEventListener('submit', runSearch);
-  $('#resolveLoc').addEventListener('click', fillCoords);
   const rerender = () => { if (lastData) render(lastData); };
   $('#hideUnpriced').addEventListener('change', rerender);
   $('#sortPrice').addEventListener('change', rerender);

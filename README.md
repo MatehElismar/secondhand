@@ -249,6 +249,7 @@ Depop/Poshmark need Chrome to be registered (see Configuration).
 | `GET` | `/docs` | Interactive Swagger UI |
 | `GET` | `/docs/json` | Raw OpenAPI 3.0 document |
 | `GET` | `/health` | Service status + which marketplaces are registered |
+| `GET` | `/v1/locations/places` | List the places this app can search (Greater Santo Domingo) |
 | `GET` | `/v1/locations/resolve` | Resolve a place name to coordinates |
 | `POST` | `/v1/search` | Search via a marketplace |
 | `GET` | `/v1/listings/:marketplace/:id` | Full details for one listing |
@@ -257,6 +258,46 @@ Depop/Poshmark need Chrome to be registered (see Configuration).
 > endpoint has request/response schemas and example bodies; the raw spec (OpenAPI
 > 3.0.3) is at `GET /docs/json` if you want to generate a client or import it into
 > Postman.
+
+**`GET /v1/locations/places`**
+
+Returns the places this app searches, and the bounds they sit in. This is a closed list
+rather than a geocoder: the app serves Greater Santo Domingo, so it offers the Distrito
+Nacional and the seven municipalities of Santo Domingo province, and nothing else. No
+marketplace and no query is needed.
+
+```json
+{
+  "groups": [
+    {
+      "id": "dn",
+      "label": "Distrito Nacional",
+      "places": [
+        { "id": "dn-santo-domingo", "name": "Santo Domingo", "label": "Santo Domingo (capital)",
+          "latitude": 18.4719, "longitude": -69.8923 }
+      ]
+    },
+    {
+      "id": "sd",
+      "label": "Provincia Santo Domingo",
+      "places": [
+        { "id": "sd-santo-domingo-este", "name": "Santo Domingo Este", "label": "Santo Domingo Este",
+          "latitude": 18.4855, "longitude": -69.87341 }
+      ]
+    }
+  ],
+  "bounds": { "south": 17.5, "north": 20, "west": -72.1, "east": -68.3 }
+}
+```
+
+The web UI builds its province -> municipality picker from this response, so the browser
+keeps no list of its own and the picker cannot offer a place the resolver does not know.
+
+> **Why a closed list.** Facebook's own location search ranks by check-ins. It answered
+> `"Santo Domingo, Dominican Republic"` - the value the form used to ship - with
+> **Santo Domingo, Paraguay** (lat -25.28), so every default search looked at another
+> continent, and the Paraguayan guarani prices that came back were then read as dollars.
+> Eight known places leave nothing to rank and nothing to disambiguate.
 
 **`GET /v1/locations/resolve?marketplace=facebook&location=...`**
 
@@ -275,8 +316,8 @@ Depop/Poshmark need Chrome to be registered (see Configuration).
 {
   "marketplace": "facebook",
   "query": "iphone 15",
-  "location": "Santo Domingo, Dominican Republic",
-  "radius": 25,
+  "location": "Santo Domingo Este",
+  "radiusKm": 40,
   "minPrice": 300,
   "maxPrice": 600,
   "limit": 25
@@ -318,8 +359,14 @@ Depop/Poshmark need Chrome to be registered (see Configuration).
 }
 ```
 
-The `search.location` above is the *resolved* coordinate for the search, populated
-by the marketplace's own `getLocation()` — nothing is hard-coded.
+The `search.location` above is the *resolved* coordinate for the search. The eight
+Greater Santo Domingo places resolve offline from the table served at
+`GET /v1/locations/places`; anything else falls through to the marketplace's own
+location search, which ranks by check-ins.
+
+The request uses `radiusKm` because the market this app serves is Dominican; it takes
+precedence over `radius` and `radiusMiles`, which stay in miles for existing callers.
+The UI defaults to 40 km, the same search area the old 25-mile default covered.
 
 The `minPrice: 300` / `maxPrice: 600` bounds in that request are **DOP**, so the
 `DOP500` listing is inside the range. Facebook's GraphQL price filters are in
