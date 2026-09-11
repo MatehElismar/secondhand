@@ -14,6 +14,49 @@ function hasRealPrice(l) {
 
 let lastData = null;
 
+// --- Server-side relevance is consumed, never re-implemented --------------
+// The API classifies every listing (`queryRelevance`) and, for a supported
+// family (currently Google Pixel), reports top-level counters. The model table
+// may only reflect what the server proved: rows classified `matched` that are
+// not accessories. Every raw listing still renders in the results list below.
+// Without counters (legacy, unsupported family), every listing counts exactly
+// as before. The small pure seam below mirrors the public/fx.js pattern so the
+// decision can be pinned by tests without a DOM.
+// The server treats a row as accessory when EITHER the relevance contract or
+// its own model accessory logic says so (review W1/W4); the browser mirrors
+// that union by also honouring the per-listing isAccessory flag, so this
+// filter can never disagree with the counters the server sent.
+const isStatsEligible = (l) =>
+  l &&
+  !l.isAccessory &&
+  l.queryRelevance &&
+  l.queryRelevance.status === 'matched' &&
+  l.queryRelevance.reason !== 'accessory';
+
+/** The listings allowed into the per-model summary, given the server decision. */
+const eligibleForStats = (listings, relevance) =>
+  relevance ? (listings || []).filter(isStatsEligible) : listings || [];
+
+/** Generic Spanish note for the stats card when the server excluded rows. */
+function relevanceNote(relevance) {
+  if (!relevance) return '';
+  const reasons = relevance.reasons || {};
+  const bits = [];
+  if (reasons.mismatch) bits.push(`${reasons.mismatch} de otra familia`);
+  if (reasons.ambiguous) bits.push(`${reasons.ambiguous} sin identificar`);
+  if (reasons.accessory) bits.push(`${reasons.accessory} accesorio(s)`);
+  const raw = relevance.raw ?? 0;
+  const matched = relevance.matched ?? 0;
+  const excluded = relevance.excluded ?? raw - matched;
+  if (raw === 0) return '';
+  return `Resumen calculado solo con ${matched} de ${raw} anuncio(s) confirmado(s) de la familia: ${excluded} excluido(s) (${bits.join(', ') || 'sin razones detalladas'}). Todos los anuncios siguen listados abajo.`;
+}
+
+// eslint-disable-next-line no-undef
+const SEAM = (globalThis.SecondhandRelevance = globalThis.SecondhandRelevance || {});
+SEAM.eligibleForStats = eligibleForStats;
+SEAM.relevanceNote = relevanceNote;
+
 // --- Product/model categorization + average asking price (across all found) ---
 // FX conversion lives in public/fx.js, loaded before this file. This file used
 // to carry its own copy of the rate, and the two copies disagreed about what
@@ -36,9 +79,9 @@ const median = (arr) => {
 // what the API already decided. Fall back to `model` for older API responses.
 const modelOf = (l) => l.modelGroup || l.model || 'Otro';
 
-function computeStats(listings) {
+function computeStats(listings, relevance) {
   const groups = new Map();
-  for (const l of listings) {
+  for (const l of eligibleForStats(listings, relevance)) {
     // Parts and accessories are not the product; they inflated these groups.
     if (l.isAccessory) continue;
     const key = modelOf(l);
@@ -71,8 +114,11 @@ function clearStats(message) {
   pending.hidden = false;
 }
 
-function renderStats(listings) {
-  const stats = computeStats(listings);
+function renderStats(listings, relevance) {
+  const stats = computeStats(listings, relevance);
+  const note = relevanceNote(relevance);
+  $('#statsNote').textContent = note;
+  $('#statsNote').hidden = !note;
   const tb = document.querySelector('#stats tbody');
   $('#statsCount').textContent = `${stats.length} modelo(s) · ${listings.length} listings`;
   tb.innerHTML = '';
@@ -171,7 +217,7 @@ function render(data) {
   $('#count').textContent = `${listings.length}${data.totalFound != null ? ' / ' + data.totalFound : ''}`;
 
   // Stats are computed over ALL records found (not just the filtered/sorted set).
-  renderStats(all);
+  renderStats(all, data.relevance);
 
   if ($('#hideUnpriced').checked) listings = listings.filter(hasRealPrice);
   if ($('#sortPrice').checked) listings = [...listings].sort((a, b) => (a.priceNumeric ?? Infinity) - (b.priceNumeric ?? Infinity));
@@ -561,7 +607,8 @@ function renderArbitrage(data) {
   if (chk) chk.addEventListener('change', (ev) => { onlyProfitable = ev.target.checked; renderArbitrage(); });
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+if (typeof document !== 'undefined') {
+  document.addEventListener('DOMContentLoaded', () => {
   init();
   $('#searchForm').addEventListener('submit', runSearch);
   $('#resolveLoc').addEventListener('click', fillCoords);
@@ -579,4 +626,5 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   $('#goArb').addEventListener('click', runArbitrage);
-});
+  });
+}
