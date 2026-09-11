@@ -74,7 +74,7 @@ export const STRONG_ACCESSORY_RE =
  * case. Resolved by position rather than by presence.
  */
 const WEAK_ACCESSORY_RE =
-  /\b(case|funda|carcasa|cover|skin|sticker|bumper|wallet|holster|mica|charger|cargador|cable|adapter|adaptador|holder|mount|stand|tripod|grip|strap|band only|packaging)\b/i;
+  /\b(case|funda|carcasa|cover|skin|sticker|bumper|wallet|holster|mica|charger|cargador|cable|adapter|adaptador|holder|mount|stand|tripod|grip|strap|band only|packaging|pantalla|pantallas)\b/i;
 
 /** "For iPhone 15" / "Compatible with iPhone 15" only ever precede accessories. */
 const FOR_PREFIX_RE = /^\s*(for|para|compatible (with|con)|fits|replacement (for|para)|genuine\s+\w+\s+\w*\s*case)\b/i;
@@ -216,6 +216,15 @@ export function parseModel(title: string): ParsedModel {
     isAccessory,
   };
 
+  // ── Google Pixel ─────────────────────────────────────────────────────────
+  // Claimed before the Apple Watch parser: a "Pixel Watch" must not fall into
+  // the Apple watch branch, and an anchored Pixel phone must be claimed before
+  // generic model-code extraction can read its tokens. Typos of the anchor
+  // itself ("Pixle") are not tolerated here — relevance owns identity-token
+  // typo tolerance, model parsing never guesses.
+  const pixel = parsePixel(t);
+  if (pixel) return finish({ ...base, ...pixel });
+
   // ── Apple Watch ────────────────────────────────────────────────────────
   if (/\b(apple\s*watch|iwatch)\b/i.test(t) || /\bwatch\s*(series|ultra|se)\b/i.test(t)) {
     const series = t.match(/serie?s?\s*(\d+)/i);
@@ -352,6 +361,73 @@ export function parseModel(title: string): ParsedModel {
 
 
 /**
+ * The Google Pixel family — phones ("Pixel 8", "Pixel 8 Pro", "Pixel 8 Pro
+ * XL", the a-series), the Fold, the Watch and the Tablet. One structural
+ * parser claims the whole family so the kinds never merge: they are separate
+ * `line` values and therefore separate model keys, exactly as the relevance
+ * module keeps them one family with separate product kinds.
+ *
+ * The title is folded for matching: NFD decomposition plus a combining-mark
+ * strip accepts "Píxel", the letter-to-digit junction split accepts
+ * "Pixel8Pro", and the URL-joined Facebook forms "Google+Pixel+6" /
+ * "Pixel+Watch+2" read like their spaced twins once + and & become
+ * separators. Seller forms like "6Pro"/"9pro" read as generation + Pro.
+ * The "a" suffix works glued ("Pixel 8a") or separated ("Pixel 10 A" appears
+ * in Facebook results), and both fold to the same "10a" key. Typos ("Pixle")
+ * are not tolerated — relevance owns identity-token typo tolerance, model
+ * parsing never guesses.
+ */
+function parsePixel(t: string): Partial<ParsedModel> | null {
+  const p = t
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[+&]/g, ' ')
+    .replace(/(?<=[a-z])(?=\d)/g, ' ');
+  if (!/\bpixel\b/.test(p)) return null;
+
+  // Fold, Watch and Tablet first: each is its own line, never a phone.
+  const fold = p.match(/pixel\s*(?:(\d{1,2}))?\s*(pro\s*xl|pro)?\s*fold\b/);
+  if (fold) {
+    return {
+      brand: 'Google',
+      line: 'Pixel Fold',
+      generation: fold[1] ?? null,
+      variant: fold[2] ? (fold[2] === 'pro' ? 'Pro' : 'Pro XL') : null,
+    };
+  }
+
+  const watch = p.match(/pixel\s*watch\b\s*(\d{1,2})?/);
+  if (watch) {
+    return { brand: 'Google', line: 'Pixel Watch', generation: watch[1] ?? null };
+  }
+
+  if (/\bpixel\s*tablets?\b/.test(p)) {
+    return { brand: 'Google', line: 'Pixel Tablet' };
+  }
+
+  // Phones. Generation may be absent ("Pixel", "Pixel XL"); the XL trim is
+  // either bare or a suffix of Pro. The a-series suffix is captured glued
+  // ("Pixel 8a") or separated ("Pixel 10 A") but never steals the A of
+  // "Android".
+  const phone = p.match(/pixel\s*(?:(\d{1,2})(a(?![a-z])|(?:\s+)a\b)?\s*)?(pro\s*xl|pro|xl)?/);
+  if (phone) {
+    // The separated "Pixel 10 A" form captures the leading space; trim it so
+    // glued and separated spellings fold to the same "10a" generation.
+    const generation = phone[1] ? `${phone[1]}${(phone[2] ?? '').trim()}` : null;
+    const variant = phone[3]
+      ? phone[3] === 'pro'
+        ? 'Pro'
+        : phone[3] === 'xl'
+          ? 'XL'
+          : 'Pro XL'
+      : null;
+    return { brand: 'Google', line: 'Pixel', generation, variant };
+  }
+
+  return null;
+}
+
+/**
  * Consoles are a top secondhand category and sellers name them every possible
  * way: "PS5", "PlayStation 5", "Play Station 5", "Vendo PS5 Slim". Left to the
  * generic fallback these became six groups of one product, none of them
@@ -441,11 +517,24 @@ const CODE_SPACED_RE = /\b([a-z]{2,3})\s(\d{3,5}[a-z]{0,4}\d{0,2})\b/gi;
 const NOT_A_CODE = /^(usb\d|hdmi\d|mp\d|led\d|lcd\d|dc\d|ac\d|no\d|v\d{2,}|win\d|ddr\d|pcie\d|sata\d|cat\d)$/i;
 /** Capacity, resolution and speed read as codes if not excluded. */
 const MEASUREMENT = /\d+(gb|tb|mb|kb|hz|mah|mm|cm|w|v|k|p)$/i;
+/**
+ * Config-shaped tokens that generic code extraction must never promote:
+ * "DE128", "XL256", "PRO128", "DE128G", "DE128GG" name a configuration, not
+ * a product, and without a structural anchor (a Google Pixel model, a
+ * WH-1000XM4…) they would otherwise become high-confidence identity. The gate
+ * is deliberately narrow — only the observed DE/XL/PRO prefixes with a digit
+ * core and optional suffix — so unrelated manufacturer codes (SE-series,
+ * maxims like WH-CH520, MDR-7506) are never caught by it.
+ */
+const CONFIG_CODE_RE = /^(de|xl|pro)\d{2,4}[a-z0-9]{0,4}$/i;
 
 function acceptCode(raw: string, title: string, index: number): string | null {
   const token = raw.replace(/[-\s]/g, '').toUpperCase();
   if (token.length < 5) return null;
   if (NOT_A_CODE.test(token) || MEASUREMENT.test(token)) return null;
+  // A configuration token is not a product code, however brand-shaped the rest
+  // of the title is ("Google DE128" stays anonymous).
+  if (CONFIG_CODE_RE.test(token)) return null;
   // A CPU part number identifies a component, not the product for sale.
   const before = title.slice(Math.max(0, index - 12), index).toLowerCase();
   if (/\b(i[3579]|ryzen|core|celeron|pentium|athlon)\s*-?\s*$/.test(before)) return null;
@@ -533,7 +622,7 @@ function finish(p: Omit<ParsedModel, 'key' | 'confidence'> & { key?: string; con
   if (p.line) parts.push(p.line);
   // Each line names itself in its own order: "iPhone 15 Pro Max", but
   // "iPad Air 4" and "Galaxy S23 Ultra".
-  if (p.line === 'iPhone' || p.line === 'PlayStation') {
+  if (p.line === 'iPhone' || p.line === 'PlayStation' || p.line === 'Pixel' || p.line === 'Pixel Fold') {
     if (p.generation) parts.push(p.generation);
     if (p.variant) parts.push(p.variant);
   } else if (p.line === 'Apple Watch') {

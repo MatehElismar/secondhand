@@ -351,3 +351,192 @@ describe('parseListingModel', () => {
     expect(parseListingModel(l).key).toBe(parseModel(l.title).key);
   });
 });
+
+describe('Google Pixel structural parse', () => {
+  it('parses every phone generation and variant structurally', () => {
+    expect(parseModel('Google Pixel 8 128GB')).toMatchObject({
+      brand: 'Google', line: 'Pixel', generation: '8', variant: null, key: 'Pixel 8 128GB', confidence: 'high',
+    });
+    expect(parseModel('Google Pixel 8 Pro 256GB Unlocked')).toMatchObject({
+      line: 'Pixel', generation: '8', variant: 'Pro', key: 'Pixel 8 Pro 256GB',
+    });
+    expect(parseModel('Pixel 9 Pro XL 1TB')).toMatchObject({
+      line: 'Pixel', generation: '9', variant: 'Pro XL', key: 'Pixel 9 Pro XL 1TB',
+    });
+    expect(parseModel('Pixel 7a 128GB')).toMatchObject({ generation: '7a', key: 'Pixel 7a 128GB' });
+    expect(parseModel('Google Pixel 6a')).toMatchObject({ generation: '6a', key: 'Pixel 6a' });
+    expect(parseModel('Pixel 9a 128GB')).toMatchObject({ generation: '9a', key: 'Pixel 9a 128GB' });
+    expect(parseModel('Google Pixel 10 Pro XL 512GB')).toMatchObject({
+      generation: '10', variant: 'Pro XL', key: 'Pixel 10 Pro XL 512GB',
+    });
+    expect(parseModel('Google Pixel 7 Pro')).toMatchObject({ generation: '7', variant: 'Pro', key: 'Pixel 7 Pro' });
+  });
+
+  it('keeps generations, trims and the original XL trim distinct', () => {
+    expect(modelKey('Pixel 8')).toBe('Pixel 8');
+    expect(modelKey('Pixel 8 Pro')).toBe('Pixel 8 Pro');
+    expect(modelKey('Pixel 9')).not.toBe(modelKey('Pixel 8'));
+    expect(modelKey('Pixel 9 Pro')).not.toBe(modelKey('Pixel 9 Pro XL'));
+    expect(modelKey('Pixel XL')).toBe('Pixel XL'); // the original Pixel XL
+    expect(modelsMatch(parseModel('Pixel 8'), parseModel('Pixel 8 Pro'))).toBe(false);
+    expect(modelsMatch(parseModel('Pixel 8 128GB'), parseModel('Pixel 8 256GB'))).toBe(false);
+  });
+
+  it('is still a line-level key when no specific model is named', () => {
+    expect(parseModel('Google Pixel')).toMatchObject({ line: 'Pixel', key: 'Pixel', confidence: 'medium' });
+  });
+});
+
+describe('Google Pixel Fold / Watch / Tablet kinds', () => {
+  it('keeps Fold, Watch and Tablet as separate kinds with separate keys', () => {
+    expect(parseModel('Google Pixel Fold')).toMatchObject({ line: 'Pixel Fold', key: 'Pixel Fold' });
+    expect(parseModel('Google Pixel 9 Pro Fold 256GB')).toMatchObject({
+      line: 'Pixel Fold', generation: '9', variant: 'Pro', key: 'Pixel Fold 9 Pro 256GB',
+    });
+    expect(parseModel('Google Pixel Watch 2 GPS 41mm')).toMatchObject({
+      line: 'Pixel Watch', generation: '2', key: 'Pixel Watch 2',
+    });
+    expect(parseModel('Google Pixel Tablet 128GB')).toMatchObject({
+      line: 'Pixel Tablet', key: 'Pixel Tablet 128GB',
+    });
+  });
+
+  it('never merges a phone with a fold, watch or tablet', () => {
+    expect(new Set(['Pixel 8', modelKey('Pixel Fold'), modelKey('Pixel Watch 2'), modelKey('Pixel Tablet')]).size).toBe(4);
+    expect(modelsMatch(parseModel('Pixel 8'), parseModel('Pixel Fold'))).toBe(false);
+    expect(modelsMatch(parseModel('Pixel 8 Pro'), parseModel('Pixel Watch 2'))).toBe(false);
+    expect(modelsMatch(parseModel('Pixel Fold'), parseModel('Pixel 9 Pro Fold'))).toBe(false);
+  });
+
+  it('drops only capacity in the family key', () => {
+    expect(modelFamily('Google Pixel 8 Pro 256GB')).toBe('Pixel 8 Pro');
+    expect(modelFamily('Google Pixel 9 Pro Fold 256GB')).toBe('Pixel Fold 9 Pro');
+    expect(modelFamily('Google Pixel Watch 2')).toBe('Pixel Watch 2');
+  });
+});
+
+describe('Google Pixel seller forms and spacing', () => {
+  it('accepts 6pro/9pro seller forms and letter-digit spacing', () => {
+    expect(modelKey('Google Pixel 8Pro 256GB')).toBe('Pixel 8 Pro 256GB');
+    expect(modelKey('Google Pixel 6Pro 128GB')).toBe('Pixel 6 Pro 128GB');
+    expect(modelKey('Pixel 9pro XL 512GB')).toBe('Pixel 9 Pro XL 512GB');
+    expect(modelKey('Google Pixel8 128GB')).toBe('Pixel 8 128GB');
+  });
+  it('normalizes the separated Pixel 10 A seller form to the same key as attached 10A', () => {
+    expect(modelKey('Google Pixel 10 A 128GB')).toBe('Pixel 10a 128GB');
+    expect(modelKey('Google Pixel 10A 128GB')).toBe('Pixel 10a 128GB');
+    expect(parseModel('Google Pixel 10 A 128GB')).toMatchObject({ generation: '10a', key: 'Pixel 10a 128GB' });
+  });
+
+  it('does not read the A in Android as an a-series suffix', () => {
+    expect(parseModel('Google Pixel 8 Android 14 Unlocked 128GB')).toMatchObject({
+      generation: '8', variant: null, key: 'Pixel 8 128GB',
+    });
+  });
+
+  it('accepts accents on the Pixel name', () => {
+    expect(modelKey('Píxel 8 Pro')).toBe('Pixel 8 Pro');
+    expect(modelKey('Google PÍXEL 7 128GB')).toBe('Pixel 7 128GB');
+  });
+
+  it('does not let a typo in the Google brand drop a recognizable Pixel anchor', () => {
+    expect(modelKey('Gogle Pixel 8 128GB')).toBe('Pixel 8 128GB');
+  });
+});
+
+describe('Google Pixel typos stay out of model parsing', () => {
+  it('never typo-tolerates the Pixel anchor itself — that is relevance\'s job', () => {
+    const r = parseModel('Google Pixle 8 128GB');
+    expect(r.confidence).toBe('low');
+    expect(r.line).toBeNull();
+    expect(r.brand).toBeNull();
+    expect(r.key).toBe('Google Pixle 8');
+  });
+});
+
+describe('Google Pixel config tokens never claim identity', () => {
+  it('extractModelCode rejects uncontextualized config tokens', () => {
+    expect(extractModelCode('Google DE128')).toBeNull();
+    expect(extractModelCode('DE128')).toBeNull();
+    expect(extractModelCode('DE128G')).toBeNull();
+    expect(extractModelCode('Google DE128GG')).toBeNull();
+    expect(extractModelCode('DE128GG')).toBeNull();
+    expect(extractModelCode('Google PRO128G8')).toBeNull();
+    expect(extractModelCode('Google XL256GG')).toBeNull();
+    expect(extractModelCode('Google XL256')).toBeNull();
+    expect(extractModelCode('Google PRO128')).toBeNull();
+    expect(extractModelCode('XL256')).toBeNull();
+    expect(extractModelCode('PRO128')).toBeNull();
+  });
+
+  it('leaves generic Google config titles low-confidence, not Google models', () => {
+    for (const t of ['Google DE128', 'Google XL256 16GB', 'Google PRO128', 'DE128G', 'Google DE128GG']) {
+      const r = parseModel(t);
+      expect(r.confidence, t).not.toBe('high');
+      expect(r.brand, t).toBeNull();
+      expect(r.line, t).toBeNull();
+    }
+  });
+
+  it('preserves other manufacturer codes untouched', () => {
+    expect(extractModelCode('Sony WH-1000XM4')).toBe('WH1000XM4');
+    expect(extractModelCode('Audio-Technica ATH-M50X Headphones')).toBe('ATHM50X');
+    expect(extractModelCode('Sony WH-CH520')).toBe('WHCH520');
+  });
+});
+
+describe('Google Pixel accessories behave like every other part title', () => {
+  it('flags device-parts strongly', () => {
+    expect(parseModel('Case For Google Pixel 8').isAccessory).toBe(true);
+    expect(parseModel('Tempered Glass For Google Pixel 8').isAccessory).toBe(true);
+  });
+
+  it('does not flag a device sold with extras', () => {
+    expect(parseModel('Google Pixel 8 Pro 256GB - includes case and charger').isAccessory).toBe(false);
+  });
+});
+
+describe('Google Pixel plus/ampersand-joined title forms', () => {
+  it('parses URL-joined Facebook titles to structural phone keys', () => {
+    expect(modelKey('Google+Pixel+6+Leer+descripción.')).toBe('Pixel 6');
+    expect(modelKey('Google+pixel+4XL')).toBe('Pixel 4 XL');
+    expect(modelKey('Google+Pixel+8+Pro+256GB')).toBe('Pixel 8 Pro 256GB');
+    expect(modelKey('Pixel+9+Pro+XL')).toBe('Pixel 9 Pro XL');
+    expect(modelKey('Pixel+Watch+2')).toBe('Pixel Watch 2');
+  });
+
+  it('keeps a joined Pixel title structural, not a bare line-level key', () => {
+    expect(parseModel('Google+Pixel+6+Leer+descripción.')).toMatchObject({
+      brand: 'Google', line: 'Pixel', generation: '6', key: 'Pixel 6', confidence: 'high',
+    });
+    expect(parseModel('Google+pixel+4XL')).toMatchObject({ generation: '4', variant: 'XL', key: 'Pixel 4 XL' });
+  });
+
+  it('preserves the bundled-extra phone key and accessories are not regressed', () => {
+    // "Pixel 8 Pro + Case" is the phone with a case — the same key as the bare phone.
+    expect(modelKey('Pixel 8 Pro + Case')).toBe(modelKey('Pixel 8 Pro'));
+    expect(parseModel('Pixel 8 Pro + Case').isAccessory).toBe(false);
+    // A joined part right after + reads as an included extra, like the spaced
+    // form; a joined subject part with strong vocabulary stays an accessory.
+    expect(modelKey('Pixel+8+Pro+Case')).toBe('Pixel 8 Pro');
+    expect(parseModel('Pixel+8+Pro+Case').isAccessory).toBe(false);
+    expect(parseModel('Pixel+8+Backhousing').isAccessory).toBe(true);
+    expect(parseModel('Case For Google Pixel 8').isAccessory).toBe(true);
+  });
+});
+
+describe('review follow-ups: config tokens and Spanish part vocabulary (W5/W2)', () => {
+  it('narrows the config-token gate to the observed DE/XL/PRO shapes with multi-letter suffixes', () => {
+    expect(extractModelCode('Google DE128GG')).toBeNull();
+    expect(extractModelCode('Google PRO128G8')).toBeNull();
+    expect(extractModelCode('Google XL256')).toBeNull();
+    // SE-series manufacturer codes are NOT config tokens and must extract.
+    expect(extractModelCode('Sony SE-1000 Stereo Receiver')).toBe('SE1000');
+    expect(extractModelCode('Technics SE-500')).toBe('SE500');
+  });
+
+  it('flags the Spanish pantalla/funda part titles as accessories', () => {
+    expect(parseModel('Pantalla Para Pixel 8').isAccessory).toBe(true);
+    expect(parseModel('Funda Para Pixel 8').isAccessory).toBe(true);
+  });
+});
