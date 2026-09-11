@@ -29,5 +29,32 @@
   const forCurrency = (currency) =>
     new Intl.NumberFormat('es-DO', { style: 'currency', currency, maximumFractionDigits: 0 });
 
-  root.SecondhandMoney = { DOP: forCurrency('DOP'), USD: forCurrency('USD') };
+  const DOP = forCurrency('DOP');
+  const USD = forCurrency('USD');
+
+  /**
+   * A listing's price, formatted in the currency it declares.
+   *
+   * The cards used to print the seller's raw string, which used a dot for thousands
+   * ("RD$20.000") while the summary table formatted the same amount with a comma. Once
+   * both sides name the currency, that difference is the only thing left disagreeing, so
+   * the card is formatted too. A listing whose currency cannot be mapped keeps the
+   * seller's string: readCurrency in src/marketplaces/base.ts reports an unrecognised
+   * symbol rather than guessing and fx.js drops those listings, so inventing one here
+   * would disagree with every other figure on the page.
+   *
+   * A bare "$" is the ambiguous case, and fx.js reads it as dollars. This has to agree,
+   * or a card and the table beside it would describe one listing in two currencies.
+   */
+  const label = (listing) => {
+    const value = listing?.priceNumeric;
+    const raw = listing?.price;
+    if (typeof value !== 'number' || !Number.isFinite(value)) return String(raw ?? '');
+    const code = String(listing?.currency ?? '').toUpperCase();
+    if (code === 'DOP' || code === 'RD$') return DOP.format(value);
+    if (code === 'USD' || code === 'US$' || code === '$') return USD.format(value);
+    return String(raw ?? value);
+  };
+
+  root.SecondhandMoney = { DOP, USD, label };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

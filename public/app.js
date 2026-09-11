@@ -289,7 +289,7 @@ function render(data) {
       ${img ? `<img loading="lazy" src="${escapeAttr(img)}" alt="" onerror="this.style.display='none'" />` : '<div class="ph"></div>'}
       <div class="body">
         <div class="title">${escape(l.title)}</div>
-        <div class="price">${escape(l.price)}${real ? '' : ' ⚠'}</div>
+        <div class="price">${escape(SecondhandMoney.label(l))}${real ? '' : ' ⚠'}</div>
         ${l.location ? `<div class="loc">📍 ${escape(l.location)}</div>` : ''}
         ${l.condition ? `<div class="meta">Condición: ${escape(l.condition)}</div>` : ''}
         ${l.seller ? `<div class="seller">👤 ${escape(l.seller)}</div>` : ''}

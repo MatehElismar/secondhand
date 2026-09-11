@@ -20,6 +20,11 @@ await import('../public/money.js');
 interface Money {
   DOP: { format(n: number): string };
   USD: { format(n: number): string };
+  label: (listing?: {
+    price?: unknown;
+    priceNumeric?: unknown;
+    currency?: unknown;
+  }) => string;
 }
 
 const M = (globalThis as unknown as { SecondhandMoney: Money }).SecondhandMoney;
@@ -53,5 +58,48 @@ describe('SecondhandMoney', () => {
   it('keeps the sign on a negative margin', () => {
     expect(M.USD.format(-180)).toBe('-US$180');
     expect(M.DOP.format(-3500)).toBe('-RD$3,500');
+  });
+});
+
+describe('SecondhandMoney.label', () => {
+  const listing = (over: Record<string, unknown> = {}) => ({
+    price: 'RD$20.000',
+    priceNumeric: 20000,
+    currency: 'DOP',
+    ...over,
+  });
+
+  // The cards used to print the seller's string, which uses a dot for thousands while the
+  // table formatted the same amount with a comma.
+  it('formats a peso listing the way the summary table does', () => {
+    expect(M.label(listing())).toBe('RD$20,000');
+    expect(M.label(listing({ currency: 'RD$' }))).toBe('RD$20,000');
+  });
+
+  it('formats a dollar listing as dollars', () => {
+    expect(M.label(listing({ price: 'US$100', priceNumeric: 100, currency: 'USD' }))).toBe('US$100');
+  });
+
+  // fx.js reads a bare "$" as dollars, so this has to agree, or a card and the summary
+  // table would describe the same listing in two different currencies.
+  it('treats a bare "$" exactly the way fx.js does', () => {
+    expect(M.label(listing({ price: '$100', priceNumeric: 100, currency: '$' }))).toBe('US$100');
+  });
+
+  // readCurrency reports an unmapped symbol instead of guessing, and fx.js drops those
+  // listings, so there is nothing honest to invent here.
+  it('keeps the seller string when the currency cannot be mapped', () => {
+    const guarani = listing({ price: '₲2.100.000', priceNumeric: 2100000, currency: '₲' });
+    expect(M.label(guarani)).toBe('₲2.100.000');
+  });
+
+  it('falls back to the seller string when no number was parsed', () => {
+    expect(M.label({ price: 'A convenir' })).toBe('A convenir');
+    expect(M.label({ price: 'A convenir', priceNumeric: null, currency: 'DOP' })).toBe('A convenir');
+  });
+
+  it('survives a listing with no price at all', () => {
+    expect(M.label({})).toBe('');
+    expect(M.label(undefined)).toBe('');
   });
 });
