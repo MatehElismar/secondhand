@@ -14,6 +14,8 @@
 
 import { getMarketplace } from './marketplaces/index.js';
 import { clusterKeys } from './fuzzy.js';
+import { classifyQueryRelevance, resolveQueryFamily } from './relevance.js';
+import type { QueryRelevance } from './relevance.js';
 import { ACCESSORY_RE, accessorySignal, isAccessoryListing, modelKey, modelsMatch, parseListingModel, parseModel, sameModel } from './models.js';
 
 // Re-exported: callers imported these from here before the parser moved into
@@ -358,16 +360,41 @@ export async function runArbitrage(opts: ArbitrageOptions) {
       ? { attempted: 0, enriched: 0 }
       : await enrichLowConfidence(primary, listings, opts.maxEnrich ?? 40);
 
-  const allModels = groupStats(listings);
+  // Unit 4: the shared query-relevance contract. A resolved query (currently
+  // the Google Pixel family) classifies every primary listing once, after any
+  // enrichment, and only `matched` non-accessory rows may drive models and
+  // price statistics — an iPhone showing up in a Pixel search must not steer
+  // the comparison. Unsupported families keep the legacy pipeline exactly as
+  // before: nothing is excluded merely because this resolver is not-applicable.
+  const family = resolveQueryFamily(opts.query);
+  const relevanceRows: Array<{ l: any; relevance: QueryRelevance }> | null = family
+    ? listings.map((l: any) => ({ l, relevance: classifyQueryRelevance(String(l.title || ''), opts.query) }))
+    : null;
+  // Shared eligibility rule (review W1): matched non-accessory by the relevance
+  // contract AND by the model accessory logic, or the row stays out of stats.
+  const eligibleRelevance = (e: { l: any; relevance: QueryRelevance }) =>
+    e.relevance.status === 'matched' &&
+    e.relevance.reason !== 'accessory' &&
+    !isAccessoryListing(e.l);
+  const statsListings = relevanceRows
+    ? listings.filter((_, i) => eligibleRelevance(relevanceRows[i]))
+    : listings;
 
-  const priced = listings.map((l: any) => toUsd(l.priceNumeric, l.currency)).filter((v): v is number => v != null && v > 0);
+  const allModels = groupStats(statsListings);
+
+  const priced = statsListings
+    .map((l: any) => toUsd(l.priceNumeric, l.currency))
+    .filter((v): v is number => v != null && v > 0);
   const totals = {
     success: primaryResult.success,
     error: primaryResult.error || undefined,
+    // Raw semantics: the count is the full returned set; the relevance block
+    // below shows how many of those are excluded and why, so nothing is hidden.
     listingsCount: listings.length,
     modelCount: allModels.length,
     distribution: bucketize(priced),
     usd: statsOf(priced),
+    ...(relevanceRows ? { relevance: relevanceCounters(relevanceRows) } : {}),
   };
 
   // Only 'low' is refused outright: those titles ("Laptop Lenovo", "Laptop
@@ -502,4 +529,30 @@ export async function runArbitrage(opts: ArbitrageOptions) {
     skippedVague: skippedVague.map((s) => ({ key: s.key, count: s.count, confidence: s.confidence })),
     selected,
   };
+}
+
+/**
+ * Aggregate the per-listing relevance decisions into the totals counters with
+ * the same accessory rule as the eligibility filter (review W1): a row counts
+ * as accessory when the relevance contract says so OR the model accessory
+ * logic does (`isAccessoryListing`), and only matched non-accessory rows are
+ * `matched`. raw is the full returned set.
+ */
+function relevanceCounters(rows: Array<{ l: any; relevance: QueryRelevance }>): {
+  raw: number;
+  matched: number;
+  excluded: number;
+  reasons: { mismatch: number; ambiguous: number; accessory: number };
+} {
+  const raw = rows.length;
+  let matched = 0;
+  const reasons = { mismatch: 0, ambiguous: 0, accessory: 0 };
+  for (const { l, relevance } of rows) {
+    const accessory = relevance.reason === 'accessory' || isAccessoryListing(l);
+    if (relevance.status === 'matched' && !accessory) matched += 1;
+    if (accessory) reasons.accessory += 1;
+    else if (relevance.reason === 'competing-family') reasons.mismatch += 1;
+    else if (relevance.status === 'ambiguous') reasons.ambiguous += 1;
+  }
+  return { raw, matched, excluded: raw - matched, reasons };
 }

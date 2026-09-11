@@ -32,9 +32,11 @@ import {
 import { runArbitrage } from './arbitrage.js';
 import { isAccessoryListing, modelFamily, parseModel } from './models.js';
 import { clusterKeys } from './fuzzy.js';
+import { classifyQueryRelevance, resolveQueryFamily, NOT_APPLICABLE } from './relevance.js';
+import type { QueryRelevance } from './relevance.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-import { SearchParams, ListingDetails, LocationCoordinates } from './types.js';
+import { SearchParams, Listing, ListingDetails, LocationCoordinates } from './types.js';
 
 const DEFAULT_PORT = 3000;
 
@@ -78,6 +80,28 @@ const listingProps: Record<string, unknown> = {
   // browser renders one row per vague product instead of one per phrasing.
   modelGroup: { type: 'string' },
   isAccessory: { type: 'boolean' },
+  // Server-side query-relevance decision (Unit 3): the browser consumes this
+  // and never re-implements the classifier. Absent fields are omitted.
+  queryRelevance: {
+    type: 'object',
+    properties: {
+      status: { type: 'string', enum: ['matched', 'ambiguous', 'mismatch'] },
+      reason: {
+        type: 'string',
+        enum: [
+          'matched',
+          'typo-matched',
+          'missing-product-anchor',
+          'competing-family',
+          'ambiguous-title',
+          'accessory',
+        ],
+      },
+      family: { type: 'string' },
+      productKind: { type: 'string' },
+      distance: { type: 'number' },
+    },
+  },
 };
 
 const resolvedLocationProps: Record<string, unknown> = {
@@ -351,6 +375,26 @@ export async function buildApiServer(): Promise<FastifyInstance> {
                 items: { type: 'object', properties: listingProps },
               },
               totalFound: { type: 'number' },
+              // Aggregate relevance counters for the resolved query family
+              // (currently google-pixel). Present only when the query resolved
+              // to a supported family; unsupported queries mark every listing
+              // queryRelevance = not-applicable and keep the legacy pipeline.
+              relevance: {
+                type: 'object',
+                properties: {
+                  raw: { type: 'number' },
+                  matched: { type: 'number' },
+                  excluded: { type: 'number' },
+                  reasons: {
+                    type: 'object',
+                    properties: {
+                      mismatch: { type: 'number' },
+                      ambiguous: { type: 'number' },
+                      accessory: { type: 'number' },
+                    },
+                  },
+                },
+              },
               note: { type: 'string' },
               error: { type: 'string' },
             },
@@ -454,36 +498,69 @@ export async function buildApiServer(): Promise<FastifyInstance> {
         });
       }
 
-      return {
-        search: searchMeta(marketplace, query, location, resolved, radiusMiles ?? radius, minPrice, maxPrice),
-        success: result.success,
-        marketplace: result.marketplace,
-        // Classify once, server-side, so every consumer groups identically.
-        listings: (() => {
-          // Classify once, server-side, so every consumer groups identically.
-          // The fuzzy group key has to be computed across the whole set:
-          // merging only makes sense relative to a key's neighbours.
-          const mapped = (result.listings || []).map((l) => {
+      // Classify once, server-side, so every consumer groups identically.
+      const { listings, relevanceCounters } = (() => {
+          // A resolved query (currently the Google Pixel family) gives every
+          // returned listing a real queryRelevance decision; unsupported
+          // queries mark each listing not-applicable (visible, never
+          // excluded) and keep the legacy pipeline intact.
+          const family = resolveQueryFamily(query);
+          const classified = (result.listings || []).map((l) => {
             const parsed = parseModel(String(l.title || ''));
-            return { l, parsed };
+            const relevance = family
+              ? classifyQueryRelevance(String(l.title || ''), query)
+              : NOT_APPLICABLE;
+            return { l, parsed, relevance };
           });
+          // The shared eligibility rule (review W1): a row is statistical only
+          // when the relevance contract AND the model accessory logic both call
+          // it a device — a matched/phone verdict plus `isAccessoryListing` (a
+          // different vocabulary, e.g. "mica") is still an accessory.
+          const isEligible = (c: { l: Listing; relevance: QueryRelevance }) =>
+            c.relevance.status === 'matched' &&
+            c.relevance.reason !== 'accessory' &&
+            !isAccessoryListing(c.l);
+          const clusterCandidates = family
+            ? classified.filter(isEligible)
+            : classified;
           // Only low-confidence keys may cluster: "Laptop Lenovo" vs
           // "Lenovo Laptop" are the same vague bucket, but "iPhone 15
           // Pro" vs "iPhone 15 Pro Max" are different machines and stay
           // put. Pass the key once per listing so the canonical key is
           // the phrasing describing the most listings.
           const canonical = clusterKeys(
-            mapped.filter(({ parsed }) => parsed.confidence === 'low').map(({ parsed }) => parsed.key),
+            clusterCandidates
+              .filter(({ parsed }) => parsed.confidence === 'low')
+              .map(({ parsed }) => parsed.key),
           );
-          return mapped.map(({ l, parsed }) => ({
-            ...l,
-            model: parsed.key,
-            modelFamily: modelFamily(String(l.title || '')),
-            // high/medium keys are their own group; only low keys remap.
-            modelGroup: parsed.confidence === 'low' ? canonical.get(parsed.key) ?? parsed.key : parsed.key,
-            ...(isAccessoryListing(l) ? { isAccessory: true } : {}),
-          }));
-        })(),
+          return {
+            listings: classified.map(({ l, parsed, relevance }) => ({
+              ...l,
+              model: parsed.key,
+              modelFamily: modelFamily(String(l.title || '')),
+              // high/medium keys are their own group; only low keys remap,
+              // and only when the listing is eligible to be grouped at all.
+              modelGroup:
+                parsed.confidence === 'low'
+                  ? family
+                    ? isEligible({ l, relevance })
+                      ? canonical.get(parsed.key) ?? parsed.key
+                      : parsed.key
+                    : canonical.get(parsed.key) ?? parsed.key
+                  : parsed.key,
+              ...(isAccessoryListing(l) ? { isAccessory: true } : {}),
+              queryRelevance: relevance,
+            })),
+            relevanceCounters: family ? aggregateRelevance(classified) : undefined,
+          };
+      })();
+
+      return {
+        search: searchMeta(marketplace, query, location, resolved, radiusMiles ?? radius, minPrice, maxPrice),
+        success: result.success,
+        marketplace: result.marketplace,
+        listings,
+        ...(relevanceCounters ? { relevance: relevanceCounters } : {}),
         ...(result.totalFound != null ? { totalFound: result.totalFound } : {}),
         ...(result.error ? { error: result.error } : {}),
         ...(result.note ? { note: result.note } : {}),
@@ -708,6 +785,32 @@ function rangeInvalid(v: unknown): boolean {
 
 function optBool(v: unknown): boolean | undefined {
   return typeof v === 'boolean' ? v : undefined;
+}
+
+/**
+ * Aggregate the per-listing relevance decisions into the response counters,
+ * with the same accessory rule as the eligibility filter (review W1): a row is
+ * counted accessory when the relevance contract says so OR the model accessory
+ * logic does (`isAccessoryListing`), and only matched non-accessory rows are
+ * `matched`. raw is the full returned set.
+ */
+function aggregateRelevance(rows: Array<{ l: Listing; relevance: QueryRelevance }>): {
+  raw: number;
+  matched: number;
+  excluded: number;
+  reasons: { mismatch: number; ambiguous: number; accessory: number };
+} {
+  const raw = rows.length;
+  let matched = 0;
+  const reasons = { mismatch: 0, ambiguous: 0, accessory: 0 };
+  for (const { l, relevance } of rows) {
+    const accessory = relevance.reason === 'accessory' || isAccessoryListing(l);
+    if (relevance.status === 'matched' && !accessory) matched += 1;
+    if (accessory) reasons.accessory += 1;
+    else if (relevance.reason === 'competing-family') reasons.mismatch += 1;
+    else if (relevance.status === 'ambiguous') reasons.ambiguous += 1;
+  }
+  return { raw, matched, excluded: raw - matched, reasons };
 }
 
 // ── Entry point ────────────────────────────────────────────────────────

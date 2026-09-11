@@ -363,3 +363,141 @@ describe('GET /v1/listings/:marketplace/:id', () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+describe('POST /v1/search — query relevance (Unit 3)', () => {
+  const pix = (id: string, title: string, priceNumeric = 100) =>
+    listing({ id, title, url: `https://example.com/${id}`, priceNumeric });
+
+  // The real mixed Google Pixel result: Pixel phone/Watch/Tablet, Gogle Pixel,
+  // Google DE128, competing brands and an accessory.
+  const mixed = () => [
+    pix('phone', 'Google Pixel 8 Pro 256GB Unlocked', 500),
+    pix('watch', 'Pixel Watch 2 GPS 41mm', 200),
+    pix('tablet', 'Pixel Tablet 128GB WiFi', 300),
+    pix('gogle', 'Gogle Pixel 8 128GB Factory Unlocked', 400),
+    pix('de128', 'Google DE128'),
+    pix('iphone', 'iPhone 15 Pro 256GB Unlocked', 800),
+    pix('galaxy', 'Samsung Galaxy S23 Ultra 512GB', 700),
+    pix('xiaomi', 'Xiaomi Redmi Note 13 128GB', 180),
+    pix('oneplus', 'OnePlus 12 16GB', 550),
+    pix('case', 'Case For Google Pixel 8'),
+  ];
+
+  it('classifies every returned listing and keeps every raw listing visible', async () => {
+    h.list = mixed();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/search',
+      payload: { marketplace: 'facebook', query: 'google pixel' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.listings).toHaveLength(10);
+    const byId = Object.fromEntries(body.listings.map((l: any) => [l.id, l]));
+    // Raw listing fields survive; nothing is hidden or dropped.
+    expect(Object.keys(byId)).toEqual(['phone', 'watch', 'tablet', 'gogle', 'de128', 'iphone', 'galaxy', 'xiaomi', 'oneplus', 'case']);
+    expect(byId.phone.title).toBe('Google Pixel 8 Pro 256GB Unlocked');
+    expect(byId.phone.priceNumeric).toBe(500);
+    expect(byId.case.title).toBe('Case For Google Pixel 8');
+    expect(byId.iphone.url).toBe('https://example.com/iphone');
+
+    // Family scope: phone, Watch and Tablet all match; brand/typology drive reason.
+    expect(byId.phone.queryRelevance).toEqual({ status: 'matched', reason: 'matched', family: 'google-pixel', productKind: 'phone' });
+    expect(byId.watch.queryRelevance).toEqual({ status: 'matched', reason: 'matched', family: 'google-pixel', productKind: 'watch' });
+    expect(byId.tablet.queryRelevance).toEqual({ status: 'matched', reason: 'matched', family: 'google-pixel', productKind: 'tablet' });
+    expect(byId.gogle.queryRelevance).toEqual({ status: 'matched', reason: 'typo-matched', family: 'google-pixel', productKind: 'phone', distance: 1 });
+    expect(byId.de128.queryRelevance).toEqual({ status: 'ambiguous', reason: 'missing-product-anchor' });
+    expect(byId.iphone.queryRelevance).toEqual({ status: 'mismatch', reason: 'competing-family' });
+    expect(byId.galaxy.queryRelevance).toEqual({ status: 'mismatch', reason: 'competing-family' });
+    expect(byId.xiaomi.queryRelevance).toEqual({ status: 'mismatch', reason: 'competing-family' });
+    expect(byId.oneplus.queryRelevance).toEqual({ status: 'mismatch', reason: 'competing-family' });
+    // Accessory: matched to the family but explicitly excluded from statistics.
+    expect(byId.case.queryRelevance).toEqual({ status: 'matched', reason: 'accessory', family: 'google-pixel' });
+  });
+
+  it('returns aggregate relevance counters (raw/matched/excluded/reasons)', async () => {
+    h.list = mixed();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/search',
+      payload: { marketplace: 'facebook', query: 'google pixel' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().relevance).toEqual({
+      raw: 10,
+      // phone, watch, tablet, gogle — the case is matched but accessory.
+      matched: 4,
+      excluded: 6,
+      reasons: { mismatch: 4, ambiguous: 1, accessory: 1 },
+    });
+  });
+
+  it('never lets fuzzy clustering merge excluded listings into a statistical group', async () => {
+    // Two ambiguous DE128 titles that WOULD cluster in legacy mode (Dice 1.0).
+    h.list = [pix('de128', 'Google DE128'), pix('de128g', 'Google DE128 128GB')];
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/search',
+      payload: { marketplace: 'facebook', query: 'google pixel' },
+    });
+    const byId = Object.fromEntries(res.json().listings.map((l: any) => [l.id, l]));
+    expect(byId.de128.modelGroup).toBe('Google De128');
+    expect(byId.de128g.modelGroup).toBe('Google De128 128gb');
+  });
+
+  it('legacy query: relevance is not-applicable, no counters, behavior preserved', async () => {
+    h.list = [
+      pix('a', 'Wooden Vintage Chair', 100),
+      pix('b', 'Vintage Wooden Chair', 120),
+      pix('c', 'Apple iPhone 15 Pro 256GB', 700),
+    ];
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/search',
+      payload: { marketplace: 'facebook', query: 'chair' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    // Marked not-applicable rather than excluded: no relevance counters block.
+    for (const l of body.listings) {
+      expect(l.queryRelevance).toEqual({ status: 'ambiguous', reason: 'missing-product-anchor' });
+    }
+    expect(body.relevance).toBeUndefined();
+    // Legacy fuzzy clustering of low keys is untouched.
+    const byId = Object.fromEntries(body.listings.map((l: any) => [l.id, l]));
+    expect(byId.a.modelGroup).toBe('Vintage Wooden Chair');
+    expect(byId.b.modelGroup).toBe('Vintage Wooden Chair');
+    expect(byId.c.modelGroup).toBe('iPhone 15 Pro 256GB');
+  });
+
+  it('declares queryRelevance and the relevance counters in the OpenAPI schema', async () => {
+    const res = await app.inject({ method: 'GET', url: '/docs/json' });
+    expect(res.statusCode).toBe(200);
+    const raw = JSON.stringify(res.json());
+    expect(raw).toContain('queryRelevance');
+    expect(raw).toContain('"relevance"');
+  });
+});
+
+describe('POST /v1/search — review follow-up W1 (accessory eligibility consistency)', () => {
+  it('excludes a row the model accessory logic flags even when queryRelevance says matched', async () => {
+    h.list = [
+      listing({ id: 'p1', title: 'Google Pixel 8 Pro 256GB Unlocked', priceNumeric: 520 }),
+      // relevance vocabulary does not know "mica"; models.ts does.
+      listing({ id: 'mica', title: 'Mica Para Pixel 8', priceNumeric: 15 }),
+    ];
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/search',
+      payload: { marketplace: 'facebook', query: 'google pixel' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const mica = body.listings.find((l: any) => l.id === 'mica');
+    expect(mica.queryRelevance).toEqual({ status: 'matched', reason: 'matched', family: 'google-pixel', productKind: 'phone' });
+    expect(mica.isAccessory).toBe(true);
+    // The shared eligibility rule (matched AND non-accessory by ANY source) means
+    // the mica row is excluded and counted as accessory, not as matched.
+    expect(body.relevance).toEqual({ raw: 2, matched: 1, excluded: 1, reasons: { mismatch: 0, ambiguous: 0, accessory: 1 } });
+  });
+});
