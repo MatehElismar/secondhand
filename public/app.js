@@ -120,26 +120,64 @@ async function fillCoords() {
   }
 }
 
+/** Show the closing-window select only when the format can actually use it. */
+function syncWindowVisibility() {
+  const isAuction = $('#buyingFormat').value === 'auction';
+  $('#endingWithinWrap').hidden = !isAuction;
+  // Leaving a stale window behind would resend a filter the user can no longer see.
+  if (!isAuction) $('#endingWithin').value = '';
+}
+
 /**
- * The format selector folds "auction closing soon" into one option; the API
- * takes it as a format plus a closing window.
+ * Build the window ladder from the single definition in public/params.js, so the
+ * options the UI offers and the values the mapping accepts cannot drift apart.
  */
-function buyingFormatParams() {
-  const v = $('#buyingFormat').value;
-  if (v === 'auction60') return { buyingFormat: 'auction', endingWithinMinutes: 60 };
-  return { buyingFormat: v };
+function fillAuctionWindows() {
+  const select = $('#endingWithin');
+  const any = document.createElement('option');
+  any.value = '';
+  any.textContent = 'Cualquier momento';
+  select.appendChild(any);
+
+  for (const group of SecondhandParams.WINDOW_GROUPS) {
+    const optgroup = document.createElement('optgroup');
+    optgroup.label = group.label;
+    for (const w of SecondhandParams.AUCTION_WINDOWS.filter((x) => x.group === group.id)) {
+      const option = document.createElement('option');
+      option.value = String(w.minutes);
+      option.textContent = w.label;
+      optgroup.appendChild(option);
+    }
+    select.appendChild(optgroup);
+  }
+}
+
+/**
+ * Why the list is empty depends on the window. A bare "no results" reads as a broken
+ * app, when the honest answer is that a five-minute window over a whole marketplace is
+ * usually empty: measured on the live API, 0 to 2 listings for most queries.
+ */
+function emptyMessage() {
+  const minutes = Number($('#endingWithin').value) || 0;
+  if ($('#buyingFormat').value === 'auction' && minutes > 0 && minutes <= 15) {
+    return 'Sin resultados. Las subastas que cierran en minutos son muy pocas: es normal que una ventana así venga vacía. Probá ≤1 h, o 2-24 h si querés ver volumen.';
+  }
+  return 'Sin resultados para mostrar.';
 }
 
 async function runSearch(e) {
   e.preventDefault();
-  const body = {
+  const body = SecondhandParams.searchBody({
     marketplace: $('#marketplace').value,
-    query: $('#query').value.trim(),
-    location: $('#location').value.trim() || undefined,
-    radius: num($('#radius')), minPrice: num($('#minPrice')),
-    maxPrice: num($('#maxPrice')), limit: num($('#limit')) || 40,
-    ...buyingFormatParams(),
-  };
+    query: $('#query').value,
+    location: $('#location').value,
+    radius: $('#radius').value,
+    minPrice: $('#minPrice').value,
+    maxPrice: $('#maxPrice').value,
+    limit: $('#limit').value,
+    format: $('#buyingFormat').value,
+    window: $('#endingWithin').value,
+  });
   $('#empty').hidden = true;
   $('#listings').innerHTML = '<p class="empty">Buscando…</p>';
   $('#note').textContent = '';
@@ -180,7 +218,7 @@ function render(data) {
 
   const box = $('#listings');
   box.innerHTML = '';
-  if (!listings.length) { $('#empty').hidden = false; }
+  if (!listings.length) { $('#empty').textContent = emptyMessage(); $('#empty').hidden = false; }
 
   for (const l of listings) {
     const img = (l.images && l.images[0]) || '';
@@ -227,7 +265,6 @@ async function fetchDetail(l) {
   }
 }
 
-const num = (input) => (input.value === '' ? undefined : Number(input.value));
 const escape = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const escapeAttr = (s) => escape(s);
 
@@ -248,16 +285,19 @@ let arbRunId = 0;
 
 async function runArbitrage(e) {
   const runId = ++arbRunId;
-  const body = {
+  // No buying format and no closing window here on purpose: how you chose to browse the
+  // list above must not rewrite what the comparison prices against. See public/params.js
+  // and the note above `isAuctionOnly` in src/arbitrage.ts.
+  const body = SecondhandParams.arbitrageBody({
     marketplace: $('#marketplace').value,
-    query: $('#query').value.trim(),
-    location: $('#location').value.trim() || undefined,
-    radius: num($('#radius')), minPrice: num($('#minPrice')),
-    maxPrice: num($('#maxPrice')), limit: num($('#limit')) || 40,
-    topN: 3, minMatches: 3,
-    ...buyingFormatParams(),
-    enrichDescriptions: $('#enrich').checked,
-  };
+    query: $('#query').value,
+    location: $('#location').value,
+    radius: $('#radius').value,
+    minPrice: $('#minPrice').value,
+    maxPrice: $('#maxPrice').value,
+    limit: $('#limit').value,
+    enrich: $('#enrich').checked,
+  });
   const res = $('#arbRes');
   clearArbitrage();
   res.innerHTML =
@@ -563,6 +603,9 @@ function renderArbitrage(data) {
 
 document.addEventListener('DOMContentLoaded', () => {
   init();
+  fillAuctionWindows();
+  syncWindowVisibility();
+  $('#buyingFormat').addEventListener('change', syncWindowVisibility);
   $('#searchForm').addEventListener('submit', runSearch);
   $('#resolveLoc').addEventListener('click', fillCoords);
   const rerender = () => { if (lastData) render(lastData); };

@@ -684,3 +684,86 @@ describe('EbayMarketplace.healthCheck', () => {
     await expect(market().healthCheck()).resolves.toBe(false);
   });
 });
+
+/**
+ * The auction closing window is the one filter the UI builds from a dropdown, and it
+ * had no coverage at all. It is also the filter that feeds the arbitrage buy side, so a
+ * silent change here moves a money number.
+ */
+describe('auction closing window', () => {
+  function endDateWindow(call: Call): { from: number; to: number } {
+    const filter = query(call, 'filter') ?? '';
+    const match = /itemEndDate:\[([^\]]+)\.\.([^\]]+)\]/.exec(filter);
+    if (!match) throw new Error(`no itemEndDate range in filter: ${filter}`);
+    return { from: Date.parse(match[1]), to: Date.parse(match[2]) };
+  }
+
+  it('adds an itemEndDate range for auctions with a window', async () => {
+    install();
+    const before = Date.now();
+    await market().search({ query: 'lamp', buyingFormat: 'auction', endingWithinMinutes: 60 });
+    const after = Date.now();
+
+    const call = callsTo(SEARCH_PATH)[0];
+    expect(query(call, 'filter')).toMatch(/^buyingOptions:\{AUCTION\},itemEndDate:\[/);
+
+    const { from, to } = endDateWindow(call);
+    // The range opens a minute out instead of at the request time: a window starting
+    // "now" races the request it is part of. Tolerance is one second because the
+    // timestamps are truncated to whole seconds (`.000Z`), which is the only precision
+    // Browse accepts, so each edge can land up to 999ms earlier than the exact offset.
+    expect(from).toBeGreaterThanOrEqual(before + 60_000 - 1_000);
+    expect(from).toBeLessThanOrEqual(after + 60_000);
+    expect(to).toBeGreaterThanOrEqual(before + 60 * 60_000 - 1_000);
+    expect(to).toBeLessThanOrEqual(after + 60 * 60_000);
+  });
+
+  it('writes whole seconds, which is the precision Browse accepts', async () => {
+    install();
+    await market().search({ query: 'lamp', buyingFormat: 'auction', endingWithinMinutes: 5 });
+
+    expect(query(callsTo(SEARCH_PATH)[0], 'filter')).toMatch(
+      /itemEndDate:\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z\.\.\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z\]/
+    );
+  });
+
+  it('widens the far edge with the requested window', async () => {
+    install();
+    await market().search({ query: 'lamp', buyingFormat: 'auction', endingWithinMinutes: 1440 });
+
+    const { from, to } = endDateWindow(callsTo(SEARCH_PATH)[0]);
+    // 1440 minutes to the far edge, minus the one minute the near edge is offset by.
+    expect(Math.round((to - from) / 60_000)).toBe(1439);
+  });
+
+  it('omits the range when no window was asked for', async () => {
+    install();
+    await market().search({ query: 'lamp', buyingFormat: 'auction' });
+
+    expect(query(callsTo(SEARCH_PATH)[0], 'filter')).toBe('buyingOptions:{AUCTION}');
+  });
+
+  it('treats a zero window as no window', async () => {
+    install();
+    await market().search({ query: 'lamp', buyingFormat: 'auction', endingWithinMinutes: 0 });
+
+    expect(query(callsTo(SEARCH_PATH)[0], 'filter')).toBe('buyingOptions:{AUCTION}');
+  });
+
+  // Buying format and closing window are independent parameters, but eBay only honours
+  // the window under the auction format. Sending it under another one would be a filter
+  // the caller believes in and the API ignores.
+  it('ignores the window for the fixed format', async () => {
+    install();
+    await market().search({ query: 'lamp', buyingFormat: 'fixed', endingWithinMinutes: 5 });
+
+    expect(query(callsTo(SEARCH_PATH)[0], 'filter')).toBe('buyingOptions:{FIXED_PRICE}');
+  });
+
+  it('ignores the window for the "any" format', async () => {
+    install();
+    await market().search({ query: 'lamp', buyingFormat: 'any', endingWithinMinutes: 5 });
+
+    expect(query(callsTo(SEARCH_PATH)[0], 'filter')).toBeNull();
+  });
+});

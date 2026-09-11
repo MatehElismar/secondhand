@@ -88,6 +88,15 @@ describe('Swagger docs', () => {
     );
   });
 
+  // The closing-window ceiling is part of both public contracts, not a convention the
+  // browser happens to follow: past a day the value stops meaning "closing soon".
+  it.each(['/v1/search', '/v1/arbitrage'])('declares the closing-window ceiling on %s', async (path) => {
+    const res = await app.inject({ method: 'GET', url: '/docs/json' });
+    const schema = res.json().paths[path].post.requestBody.content['application/json'].schema;
+    expect(schema.properties.endingWithinMinutes.minimum).toBe(1);
+    expect(schema.properties.endingWithinMinutes.maximum).toBe(1440);
+  });
+
   it('renders the Swagger UI page at /docs', async () => {
     const res = await app.inject({ method: 'GET', url: '/docs' });
     expect(res.statusCode).toBe(200);
@@ -171,6 +180,26 @@ describe('POST /v1/search', () => {
       payload: { marketplace: 'facebook', query: 'chair', minPrice: -5 },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects a closing window past the 24 hour ceiling without searching', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/search',
+      payload: { marketplace: 'ebay', query: 'chair', buyingFormat: 'auction', endingWithinMinutes: 1441 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(h.searchCalls).toEqual([]);
+  });
+
+  it('accepts a closing window at the ceiling and forwards it', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/search',
+      payload: { marketplace: 'ebay', query: 'chair', buyingFormat: 'auction', endingWithinMinutes: 1440 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(h.searchCalls[0]?.endingWithinMinutes).toBe(1440);
   });
 
   it('returns 404 for an unknown marketplace', async () => {
