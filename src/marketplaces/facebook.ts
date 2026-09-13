@@ -16,6 +16,8 @@
 import { ProxyAgent } from 'undici';
 import { BaseMarketplace } from './base.js';
 import { lookupUsCity } from './us-cities.js';
+import { DR_PLACES, lookupDrPlace } from './dr-places.js';
+import { milesToKm } from '../units.js';
 import { SearchParams, SearchResult, Listing, ListingDetails, LocationCoordinates } from '../types.js';
 
 // GraphQL endpoint and operation identifiers
@@ -36,7 +38,6 @@ const CITY_PAGE_CACHE_MAX = 200;
 
 export const DEFAULT_RADIUS_MILES = 25;
 const MAX_RADIUS_MILES = 500;
-const KM_PER_MILE = 1.609;
 const API_PAGE_SIZE = 24;
 const MIN_TRUSTED_LISTINGS = 5;
 // Facebook serves search results in 24-item pages; the client fetches the next
@@ -141,7 +142,7 @@ export class FacebookMarketplace extends BaseMarketplace {
       const coords = await this.resolveLocation(location);
       if (!coords) {
         return this.createError(
-          `Could not find location "${location}". Try a major city name like "san francisco", "nyc", or "chicago".`
+          `Could not find location "${location}". This app searches Greater Santo Domingo; use the province/municipality picker, or one of: ${DR_PLACES.map((p) => p.name).join(', ')}.`
         );
       }
 
@@ -346,7 +347,7 @@ export class FacebookMarketplace extends BaseMarketplace {
         filter_price_lower_bound: minPrice != null ? toMinorUnits(minPrice) : 0,
         filter_price_upper_bound:
           maxPrice != null ? toMinorUnits(maxPrice) : MAX_PRICE_SENTINEL,
-        filter_radius_km: Math.round(radiusMiles * KM_PER_MILE),
+        filter_radius_km: Math.round(milesToKm(radiusMiles)),
       },
       custom_request_params: {
         browse_context: null,
@@ -564,6 +565,15 @@ export class FacebookMarketplace extends BaseMarketplace {
   }
 
   private async resolveLocation(query: string): Promise<LocationCoordinates | null> {
+    // The eight Greater Santo Domingo places are tried before anything that could
+    // guess a different country. Facebook's own place search ranks by check-ins and
+    // answered "Santo Domingo, Dominican Republic" with Santo Domingo, Paraguay, so
+    // a closed list is the only way this cannot silently search another continent.
+    const dr = lookupDrPlace(query);
+    if (dr) {
+      return { latitude: dr.latitude, longitude: dr.longitude, name: dr.label ?? dr.name };
+    }
+
     const local = lookupUsCity(query);
     if (local) return local;
 

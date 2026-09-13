@@ -87,7 +87,9 @@
     marketplace: v.marketplace,
     query: String(v.query ?? '').trim(),
     location: String(v.location ?? '').trim() || undefined,
-    radius: num(v.radius),
+    // Kilometres: the UI is kilometre-native because the market it serves is Dominican.
+    // The API converts to the miles its SearchParams still carries.
+    radiusKm: num(v.radiusKm),
     minPrice: num(v.minPrice),
     maxPrice: num(v.maxPrice),
     limit: num(v.limit) || 40,
@@ -107,7 +109,7 @@
     marketplace: v.marketplace,
     query: String(v.query ?? '').trim(),
     location: String(v.location ?? '').trim() || undefined,
-    radius: num(v.radius),
+    radiusKm: num(v.radiusKm),
     minPrice: num(v.minPrice),
     maxPrice: num(v.maxPrice),
     limit: num(v.limit) || 40,

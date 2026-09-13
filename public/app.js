@@ -79,7 +79,9 @@ function renderStats(listings) {
   $('#statsPending').hidden = true;
   $('#stats').hidden = stats.length === 0;
   $('#statsEmpty').hidden = stats.length > 0;
-  const fmt = (n) => (n == null ? '—' : '$' + Math.round(n).toLocaleString('en-US'));
+  // Pesos: every figure in this table comes from SecondhandFX.toDOP, so the symbol
+  // has to say so. A bare "$" on a peso median reads as dollars.
+  const fmt = (n) => (n == null ? '—' : SecondhandMoney.DOP.format(n));
   for (const s of stats) {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${escape(s.key)}</td><td>${s.count}</td><td>${fmt(s.avg)}</td><td>${fmt(s.median)}</td><td>${fmt(s.min)}</td><td>${fmt(s.max)}</td>`;
@@ -105,19 +107,71 @@ async function init() {
   }
 }
 
-async function fillCoords() {
-  const location = $('#location').value.trim();
-  if (!location) return;
+/**
+ * The places this app can search, as served by GET /v1/locations/places.
+ *
+ * The browser keeps no list of its own: the server's closed table is the single source
+ * of truth, so the picker cannot offer a place the resolver does not know. That is the
+ * bug this replaces — a free-text field whose value was ranked by Facebook's own place
+ * search, which answered "Santo Domingo, Dominican Republic" with a city in Paraguay.
+ */
+let placeGroups = [];
+
+async function loadPlaces() {
+  const province = $('#province');
+  const municipality = $('#municipality');
+
   try {
-    const j = await (await fetch('/v1/locations/resolve?marketplace=facebook&location=' + encodeURIComponent(location))).json();
-    if (j && typeof j.latitude === 'number') {
-      $('#coords').textContent = `✓ ${j.name ?? ''} ${j.latitude.toFixed(4)}, ${j.longitude.toFixed(4)}`;
-    } else {
-      $('#coords').textContent = 'No se pudo resolver';
-    }
+    const j = await (await fetch('/v1/locations/places')).json();
+    placeGroups = Array.isArray(j.groups) ? j.groups : [];
   } catch {
-    $('#coords').textContent = 'Error al resolver';
+    placeGroups = [];
   }
+
+  province.innerHTML = '';
+  for (const group of placeGroups) {
+    const option = document.createElement('option');
+    option.value = group.id;
+    option.textContent = group.label;
+    province.appendChild(option);
+  }
+
+  if (!placeGroups.length) {
+    municipality.innerHTML = '';
+    $('#coords').textContent = 'No se pudieron cargar las ubicaciones';
+    return;
+  }
+  syncMunicipalities();
+}
+
+function placesOf(groupId) {
+  const group = placeGroups.find((g) => g.id === groupId);
+  return group ? group.places : [];
+}
+
+/** Rebuild the municipality list for whichever province is selected. */
+function syncMunicipalities() {
+  const municipality = $('#municipality');
+  municipality.innerHTML = '';
+  for (const place of placesOf($('#province').value)) {
+    const option = document.createElement('option');
+    option.value = place.name;
+    option.textContent = place.label;
+    municipality.appendChild(option);
+  }
+  showSelection();
+}
+
+/**
+ * Name the selected place and show its coordinates. The picker already makes a wrong
+ * city impossible, but the coordinates are the number the search is really built on,
+ * so they are worth stating rather than hiding behind a 12px grey hint.
+ */
+function showSelection() {
+  const place = placesOf($('#province').value).find((p) => p.name === $('#municipality').value);
+  $('#coords').textContent = place
+    ? `✓ ${place.label} · ${place.latitude.toFixed(4)}, ${place.longitude.toFixed(4)}`
+    : '';
 }
 
 /** Show the closing-window select only when the format can actually use it. */
@@ -170,8 +224,12 @@ async function runSearch(e) {
   const body = SecondhandParams.searchBody({
     marketplace: $('#marketplace').value,
     query: $('#query').value,
-    location: $('#location').value,
-    radius: $('#radius').value,
+    // The municipality picker, not a text field: a free-text place name was ranked by
+    // Facebook's own search and answered with a city in Paraguay.
+    location: $('#municipality').value,
+    // Kilometres, because the market is Dominican; the API converts to the miles its
+    // SearchParams still carries.
+    radiusKm: $('#radius').value,
     minPrice: $('#minPrice').value,
     maxPrice: $('#maxPrice').value,
     limit: $('#limit').value,
@@ -231,7 +289,7 @@ function render(data) {
       ${img ? `<img loading="lazy" src="${escapeAttr(img)}" alt="" onerror="this.style.display='none'" />` : '<div class="ph"></div>'}
       <div class="body">
         <div class="title">${escape(l.title)}</div>
-        <div class="price">${escape(l.price)}${real ? '' : ' ⚠'}</div>
+        <div class="price">${escape(SecondhandMoney.label(l))}${real ? '' : ' ⚠'}</div>
         ${l.location ? `<div class="loc">📍 ${escape(l.location)}</div>` : ''}
         ${l.condition ? `<div class="meta">Condición: ${escape(l.condition)}</div>` : ''}
         ${l.seller ? `<div class="seller">👤 ${escape(l.seller)}</div>` : ''}
@@ -291,8 +349,8 @@ async function runArbitrage(e) {
   const body = SecondhandParams.arbitrageBody({
     marketplace: $('#marketplace').value,
     query: $('#query').value,
-    location: $('#location').value,
-    radius: $('#radius').value,
+    location: $('#municipality').value,
+    radiusKm: $('#radius').value,
     minPrice: $('#minPrice').value,
     maxPrice: $('#maxPrice').value,
     limit: $('#limit').value,
@@ -320,8 +378,9 @@ async function runArbitrage(e) {
 let lastArb = null;
 let onlyProfitable = false;
 
-const usd = (n) =>
-  n == null ? '—' : (n < 0 ? '−$' : '$') + Math.abs(Math.round(n)).toLocaleString('en-US');
+// Dollars: the arbitrage panel normalizes to USD (see the legend in index.html), so it
+// says US$ rather than a bare "$" that would read the same as the peso table above.
+const usd = (n) => (n == null ? '—' : SecondhandMoney.USD.format(n));
 
 /** Net margin, or null when the buy side has no median to net against. */
 function effNet(s) {
@@ -603,11 +662,15 @@ function renderArbitrage(data) {
 
 document.addEventListener('DOMContentLoaded', () => {
   init();
+  // Both sets belong: the closing-window ladder and the place picker are independent
+  // controls, and each has to be built before it can be read.
+  loadPlaces();
+  $('#province').addEventListener('change', syncMunicipalities);
+  $('#municipality').addEventListener('change', showSelection);
   fillAuctionWindows();
   syncWindowVisibility();
   $('#buyingFormat').addEventListener('change', syncWindowVisibility);
   $('#searchForm').addEventListener('submit', runSearch);
-  $('#resolveLoc').addEventListener('click', fillCoords);
   const rerender = () => { if (lastData) render(lastData); };
   $('#hideUnpriced').addEventListener('change', rerender);
   $('#sortPrice').addEventListener('change', rerender);

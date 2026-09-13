@@ -31,6 +31,8 @@ import {
 } from './marketplaces/index.js';
 import { runArbitrage } from './arbitrage.js';
 import { isAccessoryListing, modelFamily, parseModel } from './models.js';
+import { DR_BOUNDS, listDrPlaces } from './marketplaces/dr-places.js';
+import { kmToMiles } from './units.js';
 import { clusterKeys } from './fuzzy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -211,6 +213,20 @@ export async function buildApiServer(): Promise<FastifyInstance> {
     }
   );
 
+  // ── The places this app can search ───────────────────────────────────
+  app.get(
+    '/v1/locations/places',
+    {
+      schema: {
+        tags: ['locations'],
+        summary: 'List the places this app searches',
+        description:
+          'Greater Santo Domingo only: the Distrito Nacional and the seven municipalities of Santo Domingo province. A closed list rather than a geocoder, so the client picker and the server-side resolution cannot drift apart — the UI has no list of its own to keep in sync.',
+      },
+    },
+    async () => ({ groups: listDrPlaces(), bounds: DR_BOUNDS })
+  );
+
   // ── Location resolution ──────────────────────────────────────────────
   app.get<{ Querystring: { marketplace?: string; location?: string } }>(
     '/v1/locations/resolve',
@@ -219,7 +235,7 @@ export async function buildApiServer(): Promise<FastifyInstance> {
         tags: ['locations'],
         summary: 'Resolve a place name to coordinates',
         description:
-          "Asks a marketplace to resolve a human-readable place to latitude/longitude. For Facebook the server reads Facebook's own location search (it is not hard-coded); the input and resolved name/coords are returned token-for-token.",
+          'Resolves a human-readable place to latitude/longitude. The eight Greater Santo Domingo places are resolved offline from a fixed table; anything else falls through to the marketplace, and for Facebook that means its own location search, which ranks by check-ins and is the reason an unqualified name can land in another country.',
         querystring: {
           type: 'object',
           required: ['location'],
@@ -301,6 +317,11 @@ export async function buildApiServer(): Promise<FastifyInstance> {
             marketplace: { ...marketplaceId, default: 'facebook' },
             query: { type: 'string', description: 'Search terms, e.g. "iphone 15"' },
             location: { type: 'string', description: 'Place to search around (Facebook only)' },
+            radiusKm: {
+              type: 'number',
+              description:
+                'Search radius in kilometres (Facebook only). This is what the web UI sends, because the market it serves is Dominican. Takes precedence over the mile fields below.',
+            },
             radius: { type: 'number', description: 'Search radius in miles (alias; Facebook only)' },
             radiusMiles: { type: 'number', description: 'Search radius in miles (Facebook only)' },
             minPrice: { type: 'number', minimum: 0 },
@@ -381,6 +402,7 @@ export async function buildApiServer(): Promise<FastifyInstance> {
         location,
         radius,
         radiusMiles,
+        radiusKm,
         minPrice,
         maxPrice,
         limit,
@@ -413,13 +435,19 @@ export async function buildApiServer(): Promise<FastifyInstance> {
         });
       }
 
+      // The web UI is kilometre-native, because the market it serves is Dominican.
+      // Miles stay accepted for existing callers: `radius` is the SearchParams name and
+      // `radiusMiles` the public one. Resolved once, so the number echoed back in
+      // `search.radiusMiles` is the one the marketplace was actually asked for.
+      const effectiveRadiusMiles =
+        kmToMiles(optNum(radiusKm)) ?? optNum(radiusMiles) ?? optNum(radius);
+
       const params: SearchParams = {
         query,
         location,
         maxPrice: optNum(maxPrice),
         minPrice: optNum(minPrice),
-        // Accept both `radius` (SearchParams) and `radiusMiles` (public API name).
-        radius: optNum(radiusMiles) ?? optNum(radius),
+        radius: effectiveRadiusMiles,
         limit: optNum(limit),
         offset: optNum(offset),
         showSold: optBool(showSold),
@@ -452,7 +480,7 @@ export async function buildApiServer(): Promise<FastifyInstance> {
         result = await mp.search(params);
       } catch (error) {
         return reply.code(502).send({
-          search: searchMeta(marketplace, query, location, resolved, radiusMiles ?? radius, minPrice, maxPrice),
+          search: searchMeta(marketplace, query, location, resolved, effectiveRadiusMiles, minPrice, maxPrice),
           success: false,
           listings: [],
           error: `Search failed: ${error}`,
@@ -460,7 +488,7 @@ export async function buildApiServer(): Promise<FastifyInstance> {
       }
 
       return {
-        search: searchMeta(marketplace, query, location, resolved, radiusMiles ?? radius, minPrice, maxPrice),
+        search: searchMeta(marketplace, query, location, resolved, effectiveRadiusMiles, minPrice, maxPrice),
         success: result.success,
         marketplace: result.marketplace,
         // Classify once, server-side, so every consumer groups identically.
@@ -512,7 +540,11 @@ export async function buildApiServer(): Promise<FastifyInstance> {
             marketplace: { type: 'string', default: 'facebook' },
             query: { type: 'string' },
             location: { type: 'string' },
-            radius: { type: 'number' },
+            radiusKm: {
+              type: 'number',
+              description: 'Search radius in kilometres (Facebook only). Takes precedence over `radius`.',
+            },
+            radius: { type: 'number', description: 'Search radius in miles.' },
             minPrice: { type: 'number' },
             maxPrice: { type: 'number' },
             limit: { type: 'number', default: 40 },
@@ -564,7 +596,7 @@ export async function buildApiServer(): Promise<FastifyInstance> {
           marketplace: (body.marketplace as string) || 'facebook',
           query,
           location: body.location as string | undefined,
-          radius: body.radius as number | undefined,
+          radius: kmToMiles(optNum(body.radiusKm)) ?? (body.radius as number | undefined),
           minPrice: body.minPrice as number | undefined,
           maxPrice: body.maxPrice as number | undefined,
           limit: body.limit as number | undefined,
@@ -662,6 +694,7 @@ type bodyShape = {
   location?: string;
   radius?: number;
   radiusMiles?: number;
+  radiusKm?: number;
   minPrice?: number;
   maxPrice?: number;
   limit?: number;

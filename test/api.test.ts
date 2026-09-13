@@ -84,7 +84,14 @@ describe('Swagger docs', () => {
     expect(doc.info.title).toBe('Secondhand MCP REST API');
     const paths = Object.keys(doc.paths);
     expect(paths).toEqual(
-      expect.arrayContaining(['/health', '/v1/locations/resolve', '/v1/search', '/v1/listings/{marketplace}/{id}']),
+      expect.arrayContaining([
+        '/health',
+        '/v1/locations/places',
+        '/v1/locations/resolve',
+        '/v1/search',
+        '/v1/arbitrage',
+        '/v1/listings/{marketplace}/{id}',
+      ]),
     );
   });
 
@@ -160,6 +167,20 @@ describe('GET /v1/locations/resolve', () => {
     });
     expect(res.statusCode).toBe(501);
   });
+
+  // The picker builds itself from this response, so the browser has no list of its own
+  // to drift away from the server's closed list of eight places.
+  it('serves the places the picker offers, with no marketplace and no query', async () => {
+    const res = await app.inject({ method: 'GET', url: '/v1/locations/places' });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.groups.map((g: { id: string }) => g.id)).toEqual(['dn', 'sd']);
+    expect(body.groups.flatMap((g: { places: unknown[] }) => g.places)).toHaveLength(8);
+    expect(body.bounds).toEqual({ south: 17.5, north: 20, west: -72.1, east: -68.3 });
+    // Nothing was searched and no marketplace was touched to answer this.
+    expect(h.searchCalls).toEqual([]);
+  });
 });
 
 describe('POST /v1/search', () => {
@@ -200,6 +221,45 @@ describe('POST /v1/search', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(h.searchCalls[0]?.endingWithinMinutes).toBe(1440);
+  });
+
+  // The web UI is kilometre-native because the market it serves is Dominican, while
+  // SearchParams carries miles, so the conversion has to happen here rather than in
+  // the browser — that keeps it in one tested place instead of a third copy.
+  it('converts a kilometre radius into the miles SearchParams carries', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/v1/search',
+      payload: { marketplace: 'facebook', query: 'chair', radiusKm: 40 },
+    });
+    expect(h.searchCalls[0]?.radius).toBeCloseTo(24.85, 2);
+  });
+
+  it('prefers kilometres when a caller sends both units', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/v1/search',
+      payload: { marketplace: 'facebook', query: 'chair', radiusKm: 10, radiusMiles: 500 },
+    });
+    expect(h.searchCalls[0]?.radius).toBeCloseTo(6.21, 2);
+  });
+
+  it('still accepts a mile radius for existing callers', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/v1/search',
+      payload: { marketplace: 'facebook', query: 'chair', radius: 25 },
+    });
+    expect(h.searchCalls[0]?.radius).toBe(25);
+  });
+
+  it('leaves the radius unset when nobody asks for one', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/v1/search',
+      payload: { marketplace: 'facebook', query: 'chair' },
+    });
+    expect(h.searchCalls[0]?.radius).toBeUndefined();
   });
 
   it('returns 404 for an unknown marketplace', async () => {

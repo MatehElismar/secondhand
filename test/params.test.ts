@@ -43,7 +43,7 @@ const baseForm = (format: string, windowValue: unknown) => ({
   marketplace: 'ebay',
   query: 'iphone 15',
   location: 'Santo Domingo',
-  radius: '25',
+  radiusKm: '40',
   minPrice: '100',
   maxPrice: '900',
   limit: '40',
@@ -129,7 +129,7 @@ describe('searchBody', () => {
 
   it('coerces numeric fields and keeps the default limit', () => {
     const body = P.searchBody({ marketplace: 'facebook', query: ' lamp ', limit: '' });
-    expect(body.radius).toBeUndefined();
+    expect(body.radiusKm).toBeUndefined();
     expect(body.minPrice).toBeUndefined();
     expect(body.maxPrice).toBeUndefined();
     expect(body.limit).toBe(40);
@@ -176,7 +176,7 @@ describe('arbitrageBody', () => {
     const form = baseForm('fixed', '');
     const arb = P.arbitrageBody(form);
     const search = P.searchBody(form);
-    for (const field of ['marketplace', 'query', 'location', 'radius', 'minPrice', 'maxPrice', 'limit']) {
+    for (const field of ['marketplace', 'query', 'location', 'radiusKm', 'minPrice', 'maxPrice', 'limit']) {
       expect(arb[field]).toEqual(search[field]);
     }
   });
