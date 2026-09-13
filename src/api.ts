@@ -31,6 +31,7 @@ import {
 } from './marketplaces/index.js';
 import { runArbitrage } from './arbitrage.js';
 import { isAccessoryListing, modelFamily, parseModel } from './models.js';
+import { offersAccepted } from './marketplaces/ebay.js';
 import { DR_BOUNDS, listDrPlaces } from './marketplaces/dr-places.js';
 import { kmToMiles } from './units.js';
 import { clusterKeys } from './fuzzy.js';
@@ -80,6 +81,7 @@ const listingProps: Record<string, unknown> = {
   // browser renders one row per vague product instead of one per phrasing.
   modelGroup: { type: 'string' },
   isAccessory: { type: 'boolean' },
+  acceptsOffer: { type: 'boolean' },
 };
 
 const resolvedLocationProps: Record<string, unknown> = {
@@ -515,6 +517,8 @@ export async function buildApiServer(): Promise<FastifyInstance> {
             // high/medium keys are their own group; only low keys remap.
             modelGroup: parsed.confidence === 'low' ? canonical.get(parsed.key) ?? parsed.key : parsed.key,
             ...(isAccessoryListing(l) ? { isAccessory: true } : {}),
+            // Derived once, server-side: both the result cards and the arbitrage panel read it.
+            ...(offersAccepted(l) ? { acceptsOffer: true } : {}),
           }));
         })(),
         ...(result.totalFound != null ? { totalFound: result.totalFound } : {}),

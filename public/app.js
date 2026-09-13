@@ -290,6 +290,7 @@ function render(data) {
       <div class="body">
         <div class="title">${escape(l.title)}</div>
         <div class="price">${escape(SecondhandMoney.label(l))}${real ? '' : ' ⚠'}</div>
+        ${l.acceptsOffer ? '<span class="offer-flag"><span class="tag-offer">ACEPTA OFERTAS</span></span>' : ''}
         ${l.location ? `<div class="loc">📍 ${escape(l.location)}</div>` : ''}
         ${l.condition ? `<div class="meta">Condición: ${escape(l.condition)}</div>` : ''}
         ${l.seller ? `<div class="seller">👤 ${escape(l.seller)}</div>` : ''}
@@ -548,6 +549,7 @@ function candidatesHtml(s, data) {
         <span class="arb-buy-main">
           <span class="arb-buy-title">${escape(c.title)}</span>
           <span class="arb-buy-meta">${c.auction ? '<span class="tag-auction">SUBASTA</span> ' : ''}${escape(c.condition || 'condición no informada')}${c.seller ? ' · ' + escape(c.seller) : ''}${c.auction ? ` · ${c.bidCount ?? 0} puja(s)${c.endsAt ? ' · cierra ' + escape(fmtEnds(c.endsAt)) : ''}` : ''}</span>
+          ${c.acceptsOffer ? '<span class="offer-flag"><span class="tag-offer">ACEPTA OFERTAS</span></span>' : ''}
         </span>
         <span class="arb-buy-nums">
           <span class="arb-buy-price">${usd(c.priceUsd)}</span>
