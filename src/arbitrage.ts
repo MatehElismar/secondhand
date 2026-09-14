@@ -15,6 +15,7 @@
 import { getMarketplace } from './marketplaces/index.js';
 import { clusterKeys } from './fuzzy.js';
 import { ACCESSORY_RE, accessorySignal, isAccessoryListing, modelKey, modelsMatch, parseListingModel, parseModel, sameModel } from './models.js';
+import { offersAccepted } from './marketplaces/ebay.js';
 
 // Re-exported: callers imported these from here before the parser moved into
 // its own module.
@@ -453,6 +454,9 @@ export async function runArbitrage(opts: ArbitrageOptions) {
           url: l.url,
           image: (l.images || [])[0] ?? null,
           auction: isAuctionOnly(l) || undefined,
+          // Same rule the search listings use, from the same predicate, so a unit cannot be
+          // badged one way on a card and another way in this panel.
+          acceptsOffer: offersAccepted(l) || undefined,
           bidCount: l.bidCount ?? undefined,
           endsAt: l.endsAt ?? undefined,
           netUsd: dollar(unitNet),

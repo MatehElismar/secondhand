@@ -400,3 +400,19 @@ button:hover { filter: brightness(1.1); }
   vertical-align: 1px;
 }
 .arb-buy.auction { border-style: dashed; }
+
+/* The listing takes Best Offer, so the price shown is an upper bound and the margin it
+   carries is a floor: an offer can only improve it. Blue, the app's buy-side colour,
+   rather than the amber of .tag-auction — an offer is not a warning. The two never appear
+   together, because the badge is withheld from anything with an auction option. */
+.tag-offer {
+  display: inline-block; font-size: 9.5px; font-weight: 800; letter-spacing: .06em;
+  color: var(--accent); background: rgba(91,147,255,.12);
+  border: 1px solid rgba(91,147,255,.35); border-radius: 4px; padding: 0 5px;
+  vertical-align: 1px;
+}
+
+/* The badge gets its own row instead of sitting inline in the meta line. Inline, every
+   field after it starts at a different x on every row and the list reads ragged. One
+   class for both surfaces: the result card and the arbitrage candidate. */
+.offer-flag { display: block; margin-top: 3px; }

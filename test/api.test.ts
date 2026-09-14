@@ -262,6 +262,30 @@ describe('POST /v1/search', () => {
     expect(h.searchCalls[0]?.radius).toBeUndefined();
   });
 
+  // Both the result card and the arbitrage panel read this flag, and it is derived once,
+  // server-side, so the two cannot describe the same unit differently.
+  it('marks a listing that takes Best Offer', async () => {
+    h.list = [listing({ buyingOptions: ['FIXED_PRICE', 'BEST_OFFER'] })];
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/search',
+      payload: { marketplace: 'facebook', query: 'chair' },
+    });
+    expect(res.json().listings[0].acceptsOffer).toBe(true);
+  });
+
+  // Deliberate: an auction that also takes Best Offer gets no badge, because bidding is the
+  // obvious action there and the offer tag would sit next to the SUBASTA tag saying little.
+  it('withholds the flag from an auction that also takes Best Offer', async () => {
+    h.list = [listing({ buyingOptions: ['AUCTION', 'BEST_OFFER'] })];
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/search',
+      payload: { marketplace: 'facebook', query: 'chair' },
+    });
+    expect(res.json().listings[0]).not.toHaveProperty('acceptsOffer');
+  });
+
   it('returns 404 for an unknown marketplace', async () => {
     const res = await app.inject({
       method: 'POST',

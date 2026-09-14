@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { EbayMarketplace, resizeEbayImageUrl } from '../src/marketplaces/ebay.js';
+import { EbayMarketplace, offersAccepted, resizeEbayImageUrl } from '../src/marketplaces/ebay.js';
 
 const TOKEN_URL = 'https://api.ebay.com/identity/v1/oauth2/token';
 const SEARCH_PATH = '/buy/browse/v1/item_summary/search';
@@ -74,6 +74,30 @@ beforeEach(() => {
   calls = [];
   // Unset, a developer's shell value would decide the marketplace id under test.
   vi.stubEnv('EBAY_MARKETPLACE_ID', undefined);
+});
+
+describe('offersAccepted', () => {
+  // The rule is "takes Best Offer AND is not an auction", and both halves matter: eBay
+  // allows Best Offer on an auction, and the badge is deliberately withheld there because
+  // bidding is the obvious action. This table is the product decision, pinned.
+  it.each([
+    { options: ['FIXED_PRICE', 'BEST_OFFER'], expected: true },
+    { options: ['BEST_OFFER'], expected: true },
+    { options: ['FIXED_PRICE'], expected: false },
+    { options: ['AUCTION'], expected: false },
+    { options: ['FIXED_PRICE', 'AUCTION'], expected: false },
+    { options: ['AUCTION', 'BEST_OFFER'], expected: false },
+    { options: ['FIXED_PRICE', 'AUCTION', 'BEST_OFFER'], expected: false },
+    { options: [], expected: false },
+  ])('buyingOptions $options -> $expected', ({ options, expected }) => {
+    expect(offersAccepted({ buyingOptions: options })).toBe(expected);
+  });
+
+  it('survives a listing that carries no buyingOptions at all', () => {
+    expect(offersAccepted({})).toBe(false);
+    expect(offersAccepted(null)).toBe(false);
+    expect(offersAccepted(undefined)).toBe(false);
+  });
 });
 
 describe('resizeEbayImageUrl', () => {

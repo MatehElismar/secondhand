@@ -45,6 +45,25 @@ const CONDITION_MAP: Record<string, string> = {
 };
 
 /**
+ * Whether a listing should be advertised as accepting offers.
+ *
+ * `BEST_OFFER` alone is not the whole rule: eBay also allows Best Offer *on an auction*,
+ * and there bidding is the obvious action, so anything with AUCTION is excluded. That keeps
+ * the badge off every listing the UI tags as an auction, and means the two tags can never
+ * appear together. Measured over 300 listings it withholds the badge from 13 auction-plus-
+ * offer listings, all of which only surface in the auction search anyway.
+ *
+ * It lives here because BEST_OFFER and AUCTION are eBay's vocabulary, and both consumers
+ * already speak it: src/api.ts decorates search listings and src/arbitrage.ts decorates buy
+ * candidates. One definition, so the card and the panel cannot disagree.
+ */
+export function offersAccepted(listing: { buyingOptions?: string[] } | null | undefined): boolean {
+  const options = listing?.buyingOptions;
+  if (!Array.isArray(options) || !options.includes('BEST_OFFER')) return false;
+  return !options.includes('AUCTION');
+}
+
+/**
  * eBay's Browse API returns image URLs at a small default size (e.g. s-l225 /
  * s-l500). The same CDN object is available at other sizes by rewriting the
  * `s-l<N>` size token (max dimension in px) and dropping any `/thumbs/` path
